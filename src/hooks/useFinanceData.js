@@ -5,9 +5,12 @@ export function useFinanceData(filtroPosto, filtroMes) {
   const [dadosBrutos, setDadosBrutos] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. BUSCA DADOS DA API (Assim que carrega)
+  // 1. BUSCA DADOS DA API (CORRIGIDO PARA PRODUÇÃO)
   useEffect(() => {
-    fetch('http://localhost:5000/api/dados')
+    // Pega a URL do Render (se estiver na nuvem) ou localhost (se estiver no seu PC)
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+    fetch(`${API_URL}/api/dados`, { credentials: 'include' }) // Adicionei credentials para passar o cookie se precisar
       .then(res => res.json())
       .then(data => {
         setDadosBrutos(data);

@@ -22,7 +22,8 @@ if (!JWT_SECRET) {
 
 // Configuração CORS para aceitar Cookies do Frontend
 app.use(cors({
-    origin: 'http://localhost:5173', // URL do seu React
+    origin: ['http://localhost:5173', 
+    process.env.CLIENT_URL],// URL do seu React
     credentials: true // Permite o tráfego de cookies
 }));
 
@@ -67,10 +68,10 @@ app.post('/api/auth/login', async (req, res) => {
 
         // E. Envia Cookie Seguro
         res.cookie('auth_token', token, {
-            httpOnly: true, // Javascript não lê (Proteção XSS)
-            secure: false,  // Localhost = false. Na produção (HTTPS) = true.
-            sameSite: 'lax',
-            maxAge: cookieDuration // Duração dinâmica (1 dia ou 30 dias)
+            httpOnly: true,
+            secure: isProduction, // TRUE na nuvem (HTTPS), FALSE local
+            sameSite: isProduction ? 'none' : 'lax', // 'none' é obrigatório para cross-site na nuvem
+            maxAge: cookieDuration
         });
 
         console.log(`✅ Login realizado: ${user.email} (Manter conectado: ${remember ? 'SIM' : 'NÃO'})`);
@@ -136,5 +137,5 @@ app.get('/api/dados', async (req, res) => {
 
 // --- INICIALIZAÇÃO ---
 app.listen(PORT, () => {
-    console.log(`🔥 Servidor rodando a todo vapor em: http://localhost:${PORT}`);
+    console.log(`ON`);
 });

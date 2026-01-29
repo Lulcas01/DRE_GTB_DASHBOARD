@@ -44,7 +44,7 @@ export default function Login({ onLoginSuccess }) {
             <ShieldCheck className="text-white" size={32} />
           </div>
           <h2 className="text-2xl font-bold text-slate-800">Acesso Restrito</h2>
-          <p className="text-slate-500 text-sm mt-1">Painel Financeiro Seguro</p>
+          <p className="text-slate-500 text-sm mt-1">Painel Financeiro GTB Seguro</p>
         </div>
 
         {error && (
@@ -63,7 +63,7 @@ export default function Login({ onLoginSuccess }) {
                 type="email" required value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl outline-none focus:border-blue-500 bg-slate-50 focus:bg-white transition-all"
-                placeholder="ex: lucas@empresa.com"
+                placeholder="ex: email@empresa.com"
               />
             </div>
           </div>

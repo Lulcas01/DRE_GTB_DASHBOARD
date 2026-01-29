@@ -37,20 +37,35 @@ export function useFinanceData(filtroPosto, filtroMes) {
   }, [filtroPosto, dadosBrutos]);
 
   // 4. Gráficos
-  const dadosGraficoTempo = useMemo(() => {
-    if (filtroPosto !== 'TODOS') return dadosFiltrados;
-    const agrupado = {};
-    MESES.forEach(m => {
-        agrupado[m] = { name: m, receita_bruta: 0, lucro_liquido: 0, despesas_totais: 0 };
+const dadosGraficoTempo = useMemo(() => {
+    let dadosFinais = [];
+
+    if (filtroPosto !== 'TODOS') {
+       // Se tem filtro, usa os dados filtrados
+       dadosFinais = [...dadosFiltrados];
+    } else {
+       // Se é TODOS, faz o agrupamento (soma tudo)
+       const agrupado = {};
+       MESES.forEach(m => {
+           agrupado[m] = { name: m, receita_bruta: 0, lucro_liquido: 0, despesas_totais: 0 };
+       });
+       
+       dadosFiltrados.forEach(d => {
+         if (agrupado[d.name]) {
+           Object.keys(d).forEach(key => {
+               if (typeof d[key] === 'number') agrupado[d.name][key] = (agrupado[d.name][key] || 0) + d[key];
+           });
+         }
+       });
+       
+       dadosFinais = Object.values(agrupado).filter(d => d.receita_bruta !== 0 || d.despesas_totais !== 0);
+    }
+
+    // O TRUQUE: Ordena o resultado final baseado na posição do mês na lista MESES
+    return dadosFinais.sort((a, b) => {
+        return MESES.indexOf(a.name) - MESES.indexOf(b.name);
     });
-    dadosFiltrados.forEach(d => {
-      if (agrupado[d.name]) {
-        Object.keys(d).forEach(key => {
-            if (typeof d[key] === 'number') agrupado[d.name][key] = (agrupado[d.name][key] || 0) + d[key];
-        });
-      }
-    });
-    return Object.values(agrupado).filter(d => d.receita_bruta !== 0 || d.despesas_totais !== 0);
+
   }, [dadosFiltrados, filtroPosto]);
 
   // 5. Totais (Com a correção do CMV e Pessoal)

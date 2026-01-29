@@ -13,7 +13,7 @@ const app = express();
 // --- CONFIGURAÇÕES E SEGREDOS ---
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
-
+const isProduction = process.env.NODE_ENV === 'production';
 // Trava de Segurança: Se esquecer a senha no .env, o servidor nem liga.
 if (!JWT_SECRET) {
     console.error("❌ ERRO FATAL: A variável JWT_SECRET não está no .env");

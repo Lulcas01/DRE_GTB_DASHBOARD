@@ -76,8 +76,8 @@ export const ComparativeTable = ({ dados, todosDados, onNavigateToProfile }) => 
                 <HeaderItem label="Margem Bruta" sortKey="margem_pct" />
                 <HeaderItem label="Desp. Pessoal" sortKey="pessoal" />
                 <HeaderItem label="Desp. Total" sortKey="despesa" />
-                <HeaderItem label="Lucro Líquido" sortKey="lucro" />
-                <HeaderItem label="Mg. Líquida" sortKey="lucro" />
+                <HeaderItem label="Mg. Líquida (R$)" sortKey="lucro" />
+                <HeaderItem label="Mg. Líquida (%)" sortKey="lucro" />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">

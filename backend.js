@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-
+import mongoose from 'mongoose';
 dotenv.config();
 
 const app = express();
@@ -19,6 +19,26 @@ if (!JWT_SECRET) {
     console.error("❌ ERRO FATAL: A variável JWT_SECRET não está no .env");
     process.exit(1);
 }
+const transferenciaSchema = new mongoose.Schema({
+  data: String,
+  ip: String,
+  horaEnvio: String,
+  transferencias: [
+    {
+      origem: String,
+      motorista: String,
+      placa: String, 
+      qde: String,
+      combustivel: String,
+      emissao: String,
+      destino: String,
+      caida: String,
+      pedidos: String,
+    },
+  ],
+});
+
+const Transferencia = mongoose.model("Transferencia", transferenciaSchema);
 
 // Configuração CORS para aceitar Cookies do Frontend
 app.use(cors({
@@ -134,7 +154,33 @@ app.get('/api/dados', async (req, res) => {
         if (client) client.close();
     }
 });
+app.post("/api/transferencias", async (req, res) => {
+  try {
+    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+    const horaAtual = new Date().toLocaleTimeString("pt-BR", { hour12: false });
 
+    const novaTransferencia = new Transferencia({
+      ...req.body,
+      ip,
+      horaEnvio: horaAtual,
+    });
+
+    await novaTransferencia.save();
+    res.status(201).json({ message: "✅ Transferência salva com sucesso!" });
+  } catch (error) {
+    console.error("Erro ao salvar:", error);
+    res.status(500).json({ message: "❌ Erro ao salvar a transferência." });
+  }
+});
+
+app.get("/api/transferencias", async (req, res) => {
+  try {
+    const todas = await Transferencia.find();
+    res.json(todas);
+  } catch (error) {
+    res.status(500).json({ message: "Erro ao buscar transferências." });
+  }
+});
 // --- INICIALIZAÇÃO ---
 app.listen(PORT, () => {
     console.log(`ON`);

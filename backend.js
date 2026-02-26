@@ -9,9 +9,11 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 
-import pdfParse from 'pdf-parse';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const lerPDF = require('pdf-parse');
 
-const lerPDF = pdfParse;
+//const lerPDF = pdfParse;
 
 dotenv.config();
 

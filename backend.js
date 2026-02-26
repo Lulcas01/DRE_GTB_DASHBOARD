@@ -9,11 +9,9 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const lerPDF = require('pdf-parse');
+import pdfParse from 'pdf-parse';
 
-//const lerPDF = pdfParse;
+const lerPDF = pdfParse;
 
 dotenv.config();
 
@@ -350,6 +348,7 @@ function normalizarTexto(texto) {
     .replace(/[\u0300-\u036f]/g, "") // remove acentos
     .toUpperCase();
 }
+
 function identificarCategoriaCombustivel(texto) {
   // 1️⃣ verifica se é combustível
   const ehCombustivel = PALAVRAS_COMBUSTIVEL.some(p =>
@@ -371,6 +370,55 @@ function identificarCategoriaCombustivel(texto) {
   // 3️⃣ fallback
   return "Combustível";
 }
+
+function agruparNotas(arquivos) {
+  const estrutura = {};
+
+  for (const arq of arquivos) {
+    const posto = arq.metadata?.posto || "NAO_IDENTIFICADO";
+    const data = arq.metadata?.dataEmissao || "SEM_DATA";
+    const categoria = arq.metadata?.categoria || "Outros";
+
+    // cria posto
+    if (!estrutura[posto]) {
+      estrutura[posto] = {};
+    }
+
+    // cria data
+    if (!estrutura[posto][data]) {
+      estrutura[posto][data] = {
+        combustiveis: {},
+        outros: []
+      };
+    }
+
+    const ehCombustivel =
+      categoria !== "Outros" &&
+      categoria !== "Combustível";
+
+    // 🔥 COMBUSTÍVEL POR FORNECEDOR
+    if (ehCombustivel) {
+      if (!estrutura[posto][data].combustiveis[categoria]) {
+        estrutura[posto][data].combustiveis[categoria] = [];
+      }
+
+      estrutura[posto][data].combustiveis[categoria].push(arq);
+    } else if (categoria === "Combustível") {
+      // combustível sem fornecedor identificado
+      if (!estrutura[posto][data].combustiveis["NAO_IDENTIFICADO"]) {
+        estrutura[posto][data].combustiveis["NAO_IDENTIFICADO"] = [];
+      }
+
+      estrutura[posto][data].combustiveis["NAO_IDENTIFICADO"].push(arq);
+    } else {
+      // 📦 OUTROS
+      estrutura[posto][data].outros.push(arq);
+    }
+  }
+
+  return estrutura;
+}
+
 // ROTA: Processar Upload de ZIP
 app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
   try {
@@ -447,16 +495,48 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
 // ROTA: Listar todas as notas
 app.get('/api/notas', async (req, res) => {
   try {
+    const { posto, data, fornecedor } = req.query;
+
     const db = mongoose.connection.db;
     const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
-    
-    const arquivos = await bucket.find({}).toArray();
+
+    const filtro = {};
+
+    if (posto) filtro["metadata.posto"] = posto;
+    if (data) filtro["metadata.dataEmissao"] = data;
+    if (fornecedor) filtro["metadata.categoria"] = fornecedor;
+
+    const arquivos = await bucket.find(filtro).toArray();
+
     res.json(arquivos);
   } catch (error) {
     console.error("Erro ao listar notas:", error);
     res.status(500).json({ error: "Erro ao buscar notas fiscais." });
   }
 });
+
+// ROTA: Visualizar ou baixar o PDF
+app.get('/api/notas/:id', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
+
+    const objectId = new ObjectId(req.params.id); // <-- Consertado aqui também!
+    
+    res.set('Content-Type', 'application/pdf');
+    
+    const downloadStream = bucket.openDownloadStream(objectId);
+    downloadStream.pipe(res);
+    
+    downloadStream.on('error', () => {
+      res.status(404).send("Arquivo não encontrado.");
+    });
+  } catch (error) {
+    console.error("Erro ao baixar nota:", error);
+    res.status(500).json({ error: "Erro interno ao baixar arquivo." });
+  }
+});
+
 
 // ROTA: Visualizar ou baixar o PDF
 app.get('/api/notas/:id', async (req, res) => {

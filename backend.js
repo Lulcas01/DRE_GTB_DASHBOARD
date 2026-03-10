@@ -11,7 +11,8 @@ import AdmZip from 'adm-zip';
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const lerPDF = require('pdf-parse');
+const pdfParseObj = require('pdf-parse');
+const lerPDF = pdfParseObj.default || pdfParseObj;
 
 //const lerPDF = pdfParse;
 

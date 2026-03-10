@@ -17,7 +17,8 @@ const pdfParseLib = require('pdf-parse');
 // Essa linha é a "bala de prata": ela verifica dinamicamente se a biblioteca
 // veio como uma função direta ou se o Render a colocou dentro de uma propriedade "default".
 const lerPDF = pdfParseLib?.default?.default || pdfParseLib?.default || pdfParseLib;
-
+console.log("pdfParseLib:", pdfParseLib);
+console.log("typeof:", typeof pdfParseLib);
 dotenv.config();
 
 const app = express();
@@ -453,8 +454,9 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
     for (const entry of zipEntries) {
   if (!entry.isDirectory && entry.entryName.toLowerCase().endsWith('.pdf')) {
     const pdfBuffer = entry.getData();
-    
-    const dataPDF = await lerPDF(pdfBuffer);
+
+    const parser = new pdfParseLib.PDFParse();
+    const dataPDF = await parser.parseBuffer(pdfBuffer);
     let textoCru = dataPDF.text.toUpperCase();
     textoCru = normalizarTexto(dataPDF.text);
     const dateMatch = textoCru.match(/(\d{2}\/\d{2}\/\d{4})/);
@@ -530,28 +532,6 @@ app.get('/api/notas', async (req, res) => {
   } catch (error) {
     console.error("Erro ao listar notas:", error);
     res.status(500).json({ error: "Erro ao buscar notas fiscais." });
-  }
-});
-
-// ROTA: Visualizar ou baixar o PDF
-app.get('/api/notas/:id', async (req, res) => {
-  try {
-    const db = mongoose.connection.db;
-    const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
-
-    const objectId = new ObjectId(req.params.id); // <-- Consertado aqui também!
-    
-    res.set('Content-Type', 'application/pdf');
-    
-    const downloadStream = bucket.openDownloadStream(objectId);
-    downloadStream.pipe(res);
-    
-    downloadStream.on('error', () => {
-      res.status(404).send("Arquivo não encontrado.");
-    });
-  } catch (error) {
-    console.error("Erro ao baixar nota:", error);
-    res.status(500).json({ error: "Erro interno ao baixar arquivo." });
   }
 });
 

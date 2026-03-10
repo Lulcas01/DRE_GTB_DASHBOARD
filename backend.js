@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { MongoClient, GridFSBucket, ObjectId } from 'mongodb'; // <-- ObjectId adicionado aqui!
+import { MongoClient, GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
@@ -9,12 +9,8 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const pdfParseObj = require('pdf-parse');
-const lerPDF = pdfParseObj.default || pdfParseObj;
-
-//const lerPDF = pdfParse;
+// IMPORTAÇÃO NOVA E LIMPA DO PDF-PARSE:
+import pdfParse from 'pdf-parse';
 
 dotenv.config();
 
@@ -452,7 +448,7 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
   if (!entry.isDirectory && entry.entryName.toLowerCase().endsWith('.pdf')) {
     const pdfBuffer = entry.getData();
     
-    const dataPDF = await lerPDF(pdfBuffer);
+    const dataPDF = await pdfParse(pdfBuffer);
     let textoCru = dataPDF.text.toUpperCase();
     textoCru = normalizarTexto(dataPDF.text);
     const dateMatch = textoCru.match(/(\d{2}\/\d{2}\/\d{4})/);

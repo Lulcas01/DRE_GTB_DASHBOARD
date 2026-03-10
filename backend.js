@@ -9,16 +9,7 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 
-// IMPORTAÇÃO NOVA E LIMPA DO PDF-PARSE:
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const pdfParseLib = require('pdf-parse');
-
-// Essa linha é a "bala de prata": ela verifica dinamicamente se a biblioteca
-// veio como uma função direta ou se o Render a colocou dentro de uma propriedade "default".
-const lerPDF = pdfParseLib?.default?.default || pdfParseLib?.default || pdfParseLib;
-console.log("pdfParseLib:", pdfParseLib);
-console.log("typeof:", typeof pdfParseLib);
+import pdf from "pdf-parse";
 dotenv.config();
 
 const app = express();
@@ -455,8 +446,7 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
   if (!entry.isDirectory && entry.entryName.toLowerCase().endsWith('.pdf')) {
     const pdfBuffer = entry.getData();
 
-    const parser = new pdfParseLib.PDFParse();
-    const dataPDF = await parser.parseBuffer(pdfBuffer);
+    const dataPDF = await pdf(pdfBuffer);
     let textoCru = dataPDF.text.toUpperCase();
     textoCru = normalizarTexto(dataPDF.text);
     const dateMatch = textoCru.match(/(\d{2}\/\d{2}\/\d{4})/);

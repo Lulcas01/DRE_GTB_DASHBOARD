@@ -16,7 +16,7 @@ const pdfParseLib = require('pdf-parse');
 
 // Essa linha é a "bala de prata": ela verifica dinamicamente se a biblioteca
 // veio como uma função direta ou se o Render a colocou dentro de uma propriedade "default".
-const lerPDF = typeof pdfParseLib === 'function' ? pdfParseLib : pdfParseLib.default;
+const lerPDF = pdfParseLib?.default?.default || pdfParseLib?.default || pdfParseLib;
 
 dotenv.config();
 

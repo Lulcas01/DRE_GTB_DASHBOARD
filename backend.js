@@ -361,6 +361,26 @@ function normalizarTexto(texto) {
     .toUpperCase();
 }
 
+
+function identificarProduto(texto) {
+  // 1️⃣ DIESEL S10 (Procuramos S10 primeiro para não confundir com o Diesel comum)
+  if (texto.includes("S10")) return "S10";
+
+  // 2️⃣ GASOLINA ADITIVADA (Tem que vir antes da Comum, por causa do texto "Gasolina Comum Aditivada")
+  if (texto.includes("ADITIVADA") || texto.includes("ADIT PETROBRAS")) return "ADITIVADA";
+
+  // 3️⃣ GASOLINA COMUM
+  if (texto.includes("GASOLINA COMUM") || texto.includes("GASOLINA C COMUM")) return "COMUM";
+
+  // 4️⃣ ETANOL
+  if (texto.includes("ETANOL")) return "ETANOL";
+
+  // 5️⃣ DIESEL S500 (Se chegou até aqui e tem S500 ou DIESEL, é o comum/S500)
+  if (texto.includes("S500") || texto.includes("DIESEL")) return "DIESEL";
+
+  // Se não bater com nada disso, deixa como Outros
+  return "Outros"; 
+}
 function identificarCategoriaCombustivel(texto) {
   // 1️⃣ verifica se é combustível
   const ehCombustivel = PALAVRAS_COMBUSTIVEL.some(p =>
@@ -477,13 +497,14 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
     }
 
     const categoria = identificarCategoriaCombustivel(textoCru);
-
+    const produto = identificarProduto(textoCru);
     const filename = `${postoIdentificado}_${dataEmissao}_${entry.entryName}`;
     const uploadStream = bucket.openUploadStream(filename, {
       metadata: {
         posto: postoIdentificado,
         dataEmissao: dataEmissao,
         categoria: categoria,
+        produto: produto,
         nomeOriginal: entry.entryName
       }
     });

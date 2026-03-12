@@ -1,4 +1,5 @@
 import express from 'express';
+//import { createRequire } from 'module';
 import cors from 'cors';
 import { MongoClient, GridFSBucket, ObjectId } from 'mongodb';
 import mongoose from 'mongoose';
@@ -9,7 +10,8 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 
-import pdf from "pdf-parse";
+
+import { PDFParse } from 'pdf-parse';
 dotenv.config();
 
 const app = express();
@@ -444,11 +446,18 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
 
     for (const entry of zipEntries) {
   if (!entry.isDirectory && entry.entryName.toLowerCase().endsWith('.pdf')) {
+
     const pdfBuffer = entry.getData();
 
-    const dataPDF = await pdf(pdfBuffer);
-    let textoCru = dataPDF.text.toUpperCase();
-    textoCru = normalizarTexto(dataPDF.text);
+    // 1. Converte o formato para o PDFParse novo aceitar
+    const uint8ArrayData = new Uint8Array(pdfBuffer);
+    const parser = new PDFParse(uint8ArrayData); 
+    const resultado = await parser.getText();
+    
+    // 2. Extrai o texto usando a variável correta (resultado)
+    let textoCru = resultado.text.toUpperCase();
+    textoCru = normalizarTexto(resultado.text);
+   // textoCru = normalizarTexto(dataPDF.text);
     const dateMatch = textoCru.match(/(\d{2}\/\d{2}\/\d{4})/);
     let dataEmissao = dateMatch ? dateMatch[1] : "DATA_DESCONHECIDA";
     

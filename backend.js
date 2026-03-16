@@ -469,15 +469,16 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
 
     const pdfBuffer = entry.getData();
 
-    // 1. Converte o formato para o PDFParse novo aceitar
     const uint8ArrayData = new Uint8Array(pdfBuffer);
     const parser = new PDFParse(uint8ArrayData); 
     const resultado = await parser.getText();
     
-    // 2. Extrai o texto usando a variável correta (resultado)
-    let textoCru = resultado.text.toUpperCase();
-    textoCru = normalizarTexto(resultado.text);
-   // textoCru = normalizarTexto(dataPDF.text);
+    // 2. Extrai o texto e FORÇA a limpeza pesada
+    let textoCru = normalizarTexto(resultado.text);
+    
+    // 👇 O SEGREDO ESTÁ AQUI: Remove quebras de linha e espaços duplos
+    textoCru = textoCru.replace(/\s+/g, ' '); 
+
     const dateMatch = textoCru.match(/(\d{2}\/\d{2}\/\d{4})/);
     let dataEmissao = dateMatch ? dateMatch[1] : "DATA_DESCONHECIDA";
     
@@ -498,6 +499,10 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
 
     const categoria = identificarCategoriaCombustivel(textoCru);
     const produto = identificarProduto(textoCru);
+    
+    // 👇 O ESPIÃO VAI ESCREVER NO SEU TERMINAL AGORA
+    console.log(`🔎 Arquivo: ${entry.entryName} | Posto: ${postoIdentificado} | Produto Achado: ${produto}`);
+
     const filename = `${postoIdentificado}_${dataEmissao}_${entry.entryName}`;
     const uploadStream = bucket.openUploadStream(filename, {
       metadata: {
@@ -578,6 +583,23 @@ app.get('/api/notas/:id', async (req, res) => {
   }
 });
 
+app.put('/api/notas/:id/baixar', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const objectId = new ObjectId(req.params.id);
+    
+    // Atualiza o documento no banco colocando a flag 'baixado: true' no metadata
+    await db.collection('notasFiscais.files').updateOne(
+      { _id: objectId },
+      { $set: { "metadata.baixado": true } }
+    );
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Erro ao marcar nota como baixada:", error);
+    res.status(500).json({ error: "Erro interno." });
+  }
+});
 // ======================================================
 // INICIALIZAÇÃO DO SERVIDOR
 // ======================================================

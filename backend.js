@@ -600,9 +600,380 @@ app.put('/api/notas/:id/baixar', async (req, res) => {
     res.status(500).json({ error: "Erro interno." });
   }
 });
+
+// 🔥 ROTA SECRETA: RESETAR TODOS OS DOWNLOADS 🔥
+app.get('/api/notas/reset/todas', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    
+    // Procura TODOS os arquivos e muda o baixado para falso
+    const resultado = await db.collection('notasFiscais.files').updateMany(
+      {}, // Filtro vazio = pega todos!
+      { $set: { "metadata.baixado": false } }
+    );
+    
+    res.json({ 
+      mensagem: "Mágica feita! Todas as notas voltaram a ser NOVAS.",
+      notasAfetadas: resultado.modifiedCount 
+    });
+  } catch (error) {
+    console.error("Erro ao resetar notas:", error);
+    res.status(500).json({ error: "Erro interno." });
+  }
+});
+
+const FORNECEDORES_ALVO = [
+ "Ambev S.A. - F. Nova Rio.",
+"Rio de Janeiro Refrescos Ltda.",
+"L.A.V. DRESSLER CIA. LTDA.",
+"BARRALUB BARRA MANSA OIL LTDA.",
+"AC ARAUJO DISTR DE AUTO PECA."
+];
+
 // ======================================================
-// INICIALIZAÇÃO DO SERVIDOR
+// 2. DICIONÁRIOS (BASEADOS NO SEU CSV)
 // ======================================================
+const RESPONSAVEIS_CONTAS = {
+  "AMOREIRAS INDUSTRIA E COMERCIO LTDA": "SANDRA",
+  "AUTO POSTO COIMBRA DA VILA SAO LUIZ LTDA": "SANDRA",
+  "AUTO POSTO DE SERVICOS RIVAL DE GUA E LTDA": "JUCILENE",
+  "AUTO POSTO DO TRABALHO BICAO LTDA": "SANDRA",
+  "AUTO POSTO E SERVICO BAM BAM LTDA": "CARINA",
+  "AUTO POSTO FARID 4 LTDA": "CARINA",
+  "AUTO POSTO FARID DE IGUACU LTDA": "SANDRA",
+  "AUTO POSTO JR DE IGUACU LTDA": "CLAUDIA",
+  "AUTO POSTO NOVO AMERICAS LTDA": "CLAUDIA",
+  "AUTO POSTO NOVO PEDAGIO LTDA": "CARINA",
+  "AUTO POSTO NOVO RECREIO LTDA": "JUCILENE",
+  "AUTO POSTO QUEIMADOS RIO LTDA": "CARINA",
+  "AUTO POSTO UNIVERSIDADE REALENGO LTDA": "JUCILENE",
+  "AUTO POSTO VALDEVEZ LTDA": "BEATRIZ",
+  "AUTO POSTO VILAR DOS TELES LTDA": "CARINA",
+  "AUTO POSTO VITORIA DE IMBARIE LTDA": "JUCILENE",
+  "CAXIAS PARQUE AUTO POSTO": "SANDRA",
+  "CENTRO DE ABASTECIMENTO GASTRON CAXIAS LTDA": "BEATRIZ",
+  "ENZO QUEIMADOS LTDA": "BEATRIZ",
+  "ESPLANADA DE BANGU POSTO DE GASOLINA LTDA": "JUCILENE",
+  "FLEMING CENTRO DE COMERCIO E SERVICOS LTDA": "CLAUDIA",
+  "FLEMING - CENTRO DE COMERCIO E SERVICOS LTDA": "CLAUDIA",
+  "GUERREIROS DE CAXIAS POSTO DE GASOLINA LTDA": "JUCILENE",
+  "ITAGUAI AUTO CENTER LTDA": "CARINA",
+  "LM E JB AUTO POSTO LTDA": "JUCILENE",
+  "LM & JB AUTO POSTO LTDA": "JUCILENE",
+  "NEO EXATA COMERCIO E DISTR DE COMBUSTIVEIS LTDA": "CARINA",
+  "NEO EXATA COMERCIO DISTRIBUIDORA DE COMBUSTIVEIS LTDA": "CARINA",
+  "POSTO COELHINHO LTDA": "SANDRA",
+  "POSTO DE ABASTECIMENTO AIMEE LTDA": "JUCILENE",
+  "POSTO DE ABASTECIMENTO IMPERIAL 2000 LTDA": "BEATRIZ",
+  "POSTO DE COMBUSTIVEIS CAPITAO ENGENHO NOVO LTDA": "JUCILENE",
+  "POSTO DE GASOLINA BRAZ DE PINA LTDA": "BEATRIZ",
+  "POSTO DE GASOLINA DANIELE DE NOVA IGUACU LTDA": "CARINA",
+  "POSTO DE GASOLINA DANIELE DE NOVA IGUACU": "CARINA",
+  "POSTO DE GASOLINA DO CAPITAO NA POSSE LTDA": "BEATRIZ",
+  "POSTO DE GASOLINA IMPERADOR LTDA": "BEATRIZ",
+  "POSTO DE GASOLINA JOIA DE VIZEU LTDA": "CARINA",
+  "POSTO DE GASOLINA LUANDA LTDA": "JUCILENE",
+  "POSTO DE GASOLINA LUANDA LIMITADA": "JUCILENE",
+  "POSTO DE GNV SERVAUTO II 2007 LTDA": "CLAUDIA",
+  "POSTO DE GNV SERVAUTO II LTDA": "CLAUDIA",
+  "POSTO DE GNV SERVAUTO": "CLAUDIA",
+  "POSTO DE LUBRIFICACAO MARCIAL LTDA": "SANDRA",
+  "POSTO DE SERVICO CAMBOATA LTDA": "CARINA",
+  "POSTO E GARAGEM DOM HELDER CAMARA LTDA": "JUCILENE",
+  "POSTO JACUI LTDA": "BEATRIZ",
+  "POSTO LIGHT HIGHWAY LTDA": "SANDRA",
+  "POSTO MEGA VERAO LTDA": "JUCILENE",
+  "POSTO SERVICO VIP DE SAO JOAO MERITI LTDA ME": "JUCILENE",
+  "POSTO SERVICO VIP DE SAO JOAO DE MERITI LTDA": "JUCILENE",
+  "SIC PROJAC COMBUSTIVEL LTDA": "CLAUDIA",
+  "SIC PROJAC COMBUST VEIS LTDA": "CLAUDIA",
+  "AUTO POSTO DE ABASTECIMENTO DO PRE": "SANDRA",
+  "POSTO DE COMBUSTIVEL TRES M DE CAMPO GRANDE LTDA": "SANDRA",
+  "POSTO DE COMBUSTIVEL TRES M DE CAMPO GRA": "SANDRA",
+  "POSTO DE GASOLINA CAFUNDA LTDA EPP": "CARINA",
+  "AUTO POSTO QUINTA DO RIO GRANDE LTDA": "CARINA",
+  "POSTO PERFEITO DE BARRA MANSA LTDA": "CLAUDIA",
+  "POSTO LOBO JUNIOR LTDA": "SANDRA",
+  "POSTO DE LUBRIFICACAO SAO PEDRO LTDA": "BEATRIZ",
+  "SHEKINAH DE CAMPO GRANDE LIMITADA": "BEATRIZ",
+  "POSTO DIVINA LUZ DE ANCHIETA LTDA": "BEATRIZ",
+  "AUTO POSTO FARID II LTDA": "JUCILENE",
+  "AUTO CENTER MAYARA LTDA": "CARINA",
+  "POSTO E GARAGEM RAJA DE CASCADURA L": "BEATRIZ",
+  "AUTO POSTO DO TRABALHO ABOLICAO LTD": "JUCILENE",
+  "POSTO DE GASOLINA AUTO CLUBE DE MER TDA": "SANDRA",
+  "MERCADAO DE MADUREIRA COMERCIO DE C TIVEIS LTDA": "BEATRIZ",
+  "POSTO DE GASOLINA FLOR DO MATO ALTO": "CARINA",
+  "AMIGO DA RODOVIA AUTO POSTO LTDA": "CARINA",
+  "AUTO POSTO GARDENIA AZUL LTDA": "BEATRIZ",
+  "GABINAL COMERCIO DE COMBUSTIVEIS LT": "CARINA",
+  "GARAGEM MEIER LTDA": "CLAUDIA",
+  "P. LOPES GNV POSTO DE SERVICOS LTDA": "SANDRA",
+  "ROTOR PRODUTOS DE PETROLEO LTDA": "JUCILENE",
+  "VILA VALQUEIRE COMERCIO DE COMBUSTI LTDA": "BEATRIZ",
+  "VITORIA DE IMBARIE LTDA": "JUCILENE",
+  "NOSSO POSTO DE GASOLINA SUBURBANO L": "SANDRA",
+  "POSTO MERITI 1 LTDA EPP": "SANDRA",
+  "POSTO MERITI 1 LTDA": "SANDRA",
+  "AUTO POSTO E SERVICOS BAM BAM LTDA": "CARINA",
+  "AUTO POSTO VALDEVEZ LTDA EPP": "BEATRIZ",
+  "CAXIAS PARQUE AUTO POSTO LTDA": "SANDRA"
+};
+
+const TRADUTOR_POSTOS = {
+  "AMOREIRAS INDUSTRIA E COMERCIO LTDA": "AMOREIRAS",
+  "AUTO POSTO COIMBRA DA VILA SAO LUIZ LTDA": "COIMBRA",
+  "AUTO POSTO DE SERVICOS RIVAL DE GUA E LTDA": "RIVAL",
+  "AUTO POSTO DO TRABALHO BICAO LTDA": "TRABALHO BICAO",
+  "AUTO POSTO E SERVICO BAM BAM LTDA": "BAM BAM",
+  "AUTO POSTO FARID 4 LTDA": "FARID 4",
+  "AUTO POSTO FARID DE IGUACU LTDA": "FARID 1",
+  "AUTO POSTO JR DE IGUACU LTDA": "JR DE IGUAÇU",
+  "AUTO POSTO NOVO AMERICAS LTDA": "AMÉRICAS",
+  "AUTO POSTO NOVO PEDAGIO LTDA": "PEDÁGIO",
+  "AUTO POSTO NOVO RECREIO LTDA": "NOVO RECREIO",
+  "AUTO POSTO QUEIMADOS RIO LTDA": "QUEIMADOS RIO",
+  "AUTO POSTO UNIVERSIDADE REALENGO LTDA": "REALENGO",
+  "AUTO POSTO VALDEVEZ LTDA": "VALDEVEZ",
+  "AUTO POSTO VILAR DOS TELES LTDA": "VILAR",
+  "AUTO POSTO VITORIA DE IMBARIE LTDA": "IMBARIÊ",
+  "CAXIAS PARQUE AUTO POSTO": "CAXIAS PARQUE",
+  "CENTRO DE ABASTECIMENTO GASTRON CAXIAS LTDA": "GASTRON",
+  "ENZO QUEIMADOS LTDA": "ENZO",
+  "ESPLANADA DE BANGU POSTO DE GASOLINA LTDA": "ESPLANADA",
+  "FLEMING CENTRO DE COMERCIO E SERVICOS LTDA": "FLEMING",
+  "FLEMING - CENTRO DE COMERCIO E SERVICOS LTDA": "FLEMING",
+  "GUERREIROS DE CAXIAS POSTO DE GASOLINA LTDA": "GUERREIROS",
+  "ITAGUAI AUTO CENTER LTDA": "ITAGUAÍ",
+  "LM E JB AUTO POSTO LTDA": "LM",
+  "LM & JB AUTO POSTO LTDA": "LM",
+  "NEO EXATA COMERCIO E DISTR DE COMBUSTIVEIS LTDA": "NEO EXATA",
+  "NEO EXATA COMERCIO DISTRIBUIDORA DE COMBUSTIVEIS LTDA": "NEO EXATA",
+  "POSTO COELHINHO LTDA": "COELHINHO",
+  "POSTO DE ABASTECIMENTO AIMEE LTDA": "AIMEE",
+  "POSTO DE ABASTECIMENTO IMPERIAL 2000 LTDA": "IMPERIAL 2000",
+  "POSTO DE COMBUSTIVEIS CAPITAO ENGENHO NOVO LTDA": "CAPITÃO ENG. NOVO",
+  "POSTO DE GASOLINA BRAZ DE PINA LTDA": "BRAZ DE PINA",
+  "POSTO DE GASOLINA DANIELE DE NOVA IGUACU LTDA": "DANIELE",
+  "POSTO DE GASOLINA DANIELE DE NOVA IGUACU": "DANIELE",
+  "POSTO DE GASOLINA DO CAPITAO NA POSSE LTDA": "CAPITÃO NA POSSE",
+  "POSTO DE GASOLINA IMPERADOR LTDA": "IMPERADOR",
+  "POSTO DE GASOLINA JOIA DE VIZEU LTDA": "JOÍA",
+  "POSTO DE GASOLINA LUANDA LTDA": "LUANDA",
+  "POSTO DE GASOLINA LUANDA LIMITADA": "LUANDA",
+  "POSTO DE GNV SERVAUTO II 2007 LTDA": "SERVAUTO",
+  "POSTO DE GNV SERVAUTO II LTDA": "SERVAUTO",
+  "POSTO DE GNV SERVAUTO": "SERVAUTO",
+  "POSTO DE LUBRIFICACAO MARCIAL LTDA": "MARCIAL",
+  "POSTO DE SERVICO CAMBOATA LTDA": "CAMBOATÁ",
+  "POSTO E GARAGEM DOM HELDER CAMARA LTDA": "DOM HÉLDER",
+  "POSTO JACUI LTDA": "JACUÍ",
+  "POSTO LIGHT HIGHWAY LTDA": "LIGHT",
+  "POSTO MEGA VERAO LTDA": "MEGA VERÃO",
+  "POSTO SERVICO VIP DE SAO JOAO MERITI LTDA ME": "VIP",
+  "POSTO SERVICO VIP DE SAO JOAO DE MERITI LTDA": "VIP",
+  "SIC PROJAC COMBUSTIVEL LTDA": "PROJAC",
+  "SIC PROJAC COMBUST VEIS LTDA": "PROJAC",
+  "AUTO POSTO DE ABASTECIMENTO DO PRE": "PRÉ",
+  "POSTO DE COMBUSTIVEL TRES M DE CAMPO GRANDE LTDA": "TRÊS M",
+  "POSTO DE COMBUSTIVEL TRES M DE CAMPO GRA": "TRÊS M",
+  "POSTO DE GASOLINA CAFUNDA LTDA EPP": "CAFUNDÁ",
+  "AUTO POSTO QUINTA DO RIO GRANDE LTDA": "RIO GRANDE",
+  "POSTO PERFEITO DE BARRA MANSA LTDA": "BARRA MANSA",
+  "POSTO LOBO JUNIOR LTDA": "LOBO",
+  "POSTO DE LUBRIFICACAO SAO PEDRO LTDA": "SÃO PEDRO",
+  "SHEKINAH DE CAMPO GRANDE LIMITADA": "SHEKINAH",
+  "POSTO DIVINA LUZ DE ANCHIETA LTDA": "DIVINA",
+  "AUTO POSTO FARID II LTDA": "FARID 2",
+  "AUTO CENTER MAYARA LTDA": "MAYARA",
+  "POSTO E GARAGEM RAJA DE CASCADURA L": "RAJA",
+  "AUTO POSTO DO TRABALHO ABOLICAO LTD": "TRABALHO ABOLIÇÃO",
+  "POSTO DE GASOLINA AUTO CLUBE DE MER TDA": "AUTO CLUBE",
+  "MERCADAO DE MADUREIRA COMERCIO DE C TIVEIS LTDA": "MERCADAO",
+  "POSTO DE GASOLINA FLOR DO MATO ALTO": "MATO ALTO",
+  "AMIGO DA RODOVIA AUTO POSTO LTDA": "AMIGO DA RODOVIA",
+  "AUTO POSTO GARDENIA AZUL LTDA": "GARDÊNIA",
+  "GABINAL COMERCIO DE COMBUSTIVEIS LT": "GABINAL",
+  "GARAGEM MEIER LTDA": "GARAGEM MÉIER",
+  "P. LOPES GNV POSTO DE SERVICOS LTDA": "PLOPES",
+  "ROTOR PRODUTOS DE PETROLEO LTDA": "ROTOR",
+  "VILA VALQUEIRE COMERCIO DE COMBUSTI LTDA": "VILA VALQUEIRE",
+  "VITORIA DE IMBARIE LTDA": "IMBARIÊ",
+  "NOSSO POSTO DE GASOLINA SUBURBANO L": "SUBURBANO",
+  "POSTO MERITI 1 LTDA EPP": "MERITI",
+  "POSTO MERITI 1 LTDA": "MERITI",
+  "AUTO POSTO E SERVICOS BAM BAM LTDA": "BAM BAM",
+  "AUTO POSTO VALDEVEZ LTDA EPP": "VALDEVEZ",
+  "CAXIAS PARQUE AUTO POSTO LTDA": "CAXIAS PARQUE"
+};
+
+//function normalizarTexto(texto) {
+ // return texto ? texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim() : "";
+//}
+
+function identificarResponsavel(nomeEmpresaCrua) {
+  const empresaNorm = normalizarTexto(nomeEmpresaCrua);
+  for (const [key, responsavel] of Object.entries(RESPONSAVEIS_CONTAS)) {
+    if (empresaNorm.includes(normalizarTexto(key)) || normalizarTexto(key).includes(empresaNorm)) {
+      return responsavel;
+    }
+  }
+  return "NAO_ATRIBUIDO";
+}
+
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json());
+
+
+// ======================================================
+// ROTA: UPLOAD DE ZIP (CONTAS A PAGAR)
+// ======================================================
+app.post('/api/contas/upload', upload.single('arquivoZip'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
+
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'contasAPagar' }); 
+    const zip = new AdmZip(req.file.buffer);
+    const zipEntries = zip.getEntries();
+    let notasProcessadas = [];
+    let notasIgnoradas = 0; // Contador só para você saber no log quantos foram barrados
+
+    for (const entry of zipEntries) {
+      if (!entry.isDirectory) {
+        const isPdf = entry.entryName.toLowerCase().endsWith('.pdf');
+        const isXml = entry.entryName.toLowerCase().endsWith('.xml');
+
+        if (isPdf || isXml) {
+          let dataEmissao = "DATA_DESCONHECIDA";
+          let empresaCrua = "EMPRESA_DESCONHECIDA";
+          let fornecedor = "FORNECEDOR_DESCONHECIDO";
+          let ehFornecedorAlvo = false; // 🚦 NOSSA FLAG DE BLOQUEIO
+
+          const fileBuffer = entry.getData();
+
+          if (isXml) {
+            const xmlStr = fileBuffer.toString('utf8');
+            
+            // 🎯 LÓGICA DE FORNECEDOR (XML)
+            const emitMatch = xmlStr.match(/<emit>[\s\S]*?<xNome>(.*?)<\/xNome>/);
+            if (emitMatch) {
+              const fornecedorXML = normalizarTexto(emitMatch[1]);
+              fornecedor = fornecedorXML; // Padrão: Usa o que achou no XML
+
+              // Verifica se está na lista permitida
+              for (const f of FORNECEDORES_ALVO) {
+                if (fornecedorXML.includes(normalizarTexto(f))) {
+                  fornecedor = f;
+                  ehFornecedorAlvo = true; // Liberado!
+                  break;
+                }
+              }
+            }
+
+            const destMatch = xmlStr.match(/<dest>[\s\S]*?<xNome>(.*?)<\/xNome>/);
+            if (destMatch) empresaCrua = normalizarTexto(destMatch[1]);
+
+            const dateMatch = xmlStr.match(/<dhEmi>(\d{4}-\d{2}-\d{2})T/);
+            if (dateMatch) dataEmissao = dateMatch[1];
+            
+          } else if (isPdf) {
+            const parser = new PDFParse(new Uint8Array(fileBuffer)); 
+            const resultado = await parser.getText();
+            const textoCru = normalizarTexto(resultado.text).replace(/\s+/g, ' '); 
+
+            const dateMatch = textoCru.match(/(\d{2}\/\d{2}\/\d{4})/);
+            if (dateMatch) {
+              const [d, m, y] = dateMatch[1].split('/');
+              dataEmissao = `${y}-${m}-${d}`; 
+            }
+            
+            // 🎯 LÓGICA DE FORNECEDOR (PDF)
+            for (const f of FORNECEDORES_ALVO) {
+              if (textoCru.includes(normalizarTexto(f))) {
+                fornecedor = f;
+                ehFornecedorAlvo = true; // Liberado!
+                break;
+              }
+            }
+            
+            for (const key of Object.keys(RESPONSAVEIS_CONTAS)) {
+              if (textoCru.includes(normalizarTexto(key))) {
+                empresaCrua = key;
+                break;
+              }
+            }
+          }
+
+          // 🛑 A BARREIRA: Se não achou na nossa lista alvo, ignora o arquivo
+          if (!ehFornecedorAlvo) {
+            console.log(`🚫 Ignorado (Fornecedor não é alvo): ${entry.entryName}`);
+            notasIgnoradas++;
+            continue; // Pula para o próximo arquivo do ZIP, não faz upload
+          }
+
+          const responsavel = identificarResponsavel(empresaCrua);
+          const empresaFormatada = TRADUTOR_POSTOS[empresaCrua] || empresaCrua; 
+
+          const nomeOriginalBase = entry.entryName.replace(/\.[^/.]+$/, "");
+          const filename = `${responsavel}_${dataEmissao}_${entry.entryName}`;
+          
+          const uploadStream = bucket.openUploadStream(filename, {
+            metadata: {
+              empresa: empresaFormatada, 
+              fornecedor: fornecedor, 
+              dataEmissao: dataEmissao,
+              responsavel: responsavel,
+              tipoArquivo: isPdf ? 'PDF' : 'XML',
+              nomeOriginalBase: nomeOriginalBase
+            }
+          });
+
+          uploadStream.end(fileBuffer);
+          
+          notasProcessadas.push({
+            nome: filename, empresa: empresaFormatada, fornecedor, responsavel, tipo: isPdf ? 'PDF' : 'XML'
+          });
+        }
+      }
+    }
+    
+    console.log(`✅ ZIP processado. ${notasProcessadas.length} notas salvas, ${notasIgnoradas} barradas.`);
+    res.status(200).json({ mensagem: "ZIP processado com sucesso!", total: notasProcessadas.length });
+  } catch (error) {
+    console.error("Erro no processamento:", error);
+    res.status(500).json({ error: "Erro interno ao processar o arquivo." });
+  }
+});
+
+// ======================================================
+// ROTAS DE BUSCA E DOWNLOAD
+// ======================================================
+app.get('/api/contas', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'contasAPagar' });
+    const arquivos = await bucket.find({}).toArray();
+    res.json(arquivos);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao buscar notas." });
+  }
+});
+
+app.get('/api/contas/:id', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'contasAPagar' });
+    const objectId = new ObjectId(req.params.id); 
+    const downloadStream = bucket.openDownloadStream(objectId);
+    downloadStream.pipe(res);
+    downloadStream.on('error', () => res.status(404).send("Arquivo não encontrado."));
+  } catch (error) {
+    res.status(500).json({ error: "Erro interno." });
+  }
+});
+
+
 app.listen(PORT, () => {
     console.log(`🚀 Servidor a correr de forma unificada na porta ${PORT}`);
 });

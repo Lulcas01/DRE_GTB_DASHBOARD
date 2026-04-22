@@ -755,6 +755,78 @@ app.get('/api/contas/:id', async (req, res) => {
 });
 
 
+app.put('/api/contas/:id/baixar', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    await db.collection('contasAPagar.files').updateOne(
+      { _id: new ObjectId(req.params.id) }, { $set: { "metadata.baixado": true } }
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Erro interno." });
+  }
+});
+// ======================================================
+// ROTA TEMPORÁRIA: REPROCESSAR PRODUTOS (S10, ETANOL, ETC)
+// ======================================================
+app.get('/api/notas/admin/reprocessar', async (req, res) => {
+  console.log("Iniciando reprocessamento das notas...");
+  
+  try {
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
+    
+    // Pega todas as notas salvas no banco
+    const arquivos = await db.collection('notasFiscais.files').find({}).toArray();
+    let atualizadas = 0;
+    let erros = 0;
+
+    res.write("Reprocessamento iniciado. Acompanhe no terminal do servidor...\n");
+
+    for (const arquivo of arquivos) {
+      try {
+        // Baixa o buffer do PDF do GridFS
+        const downloadStream = bucket.openDownloadStream(arquivo._id);
+        const chunks = [];
+        
+        for await (const chunk of downloadStream) {
+          chunks.push(chunk);
+        }
+        const fileBuffer = Buffer.concat(chunks);
+
+        // Lê o texto do PDF novamente
+        const parser = new PDFParse(new Uint8Array(fileBuffer));
+        const resultado = await parser.getText();
+        const textoCru = normalizarTexto(resultado.text).replace(/\s+/g, ' ');
+
+        // Passa no seu novo filtro melhorado
+        const novoProduto = identificarProduto(textoCru);
+        const produtoAntigo = arquivo.metadata.produto;
+
+        // Se o produto mudou, atualiza no banco
+        if (novoProduto !== produtoAntigo) {
+          await db.collection('notasFiscais.files').updateOne(
+            { _id: arquivo._id },
+            { $set: { "metadata.produto": novoProduto } }
+          );
+          console.log(`🔄 Atualizado: ${arquivo.filename} | De: ${produtoAntigo} -> Para: ${novoProduto}`);
+          atualizadas++;
+        }
+      } catch (err) {
+        console.error(`❌ Erro ao reprocessar arquivo ${arquivo._id}:`, err);
+        erros++;
+      }
+    }
+
+    const mensagemFinal = `\n✅ Processo concluído! Notas atualizadas: ${atualizadas}. Erros: ${erros}.`;
+    console.log(mensagemFinal);
+    res.end(mensagemFinal);
+
+  } catch (error) {
+    console.error("Erro geral no reprocessamento:", error);
+    res.status(500).end("\nErro interno ao tentar reprocessar.");
+  }
+});
 
 // ======================================================
 // INICIALIZAÇÃO DO SERVIDOR

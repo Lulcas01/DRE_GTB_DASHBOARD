@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configurações
-CAMINHO_JSON = './src/data/dados_reais.json' # Onde está seu arquivo hoje
+CAMINHO_JSON = './src/data/dados_reais2.json' # Onde está seu arquivo hoje
 MONGO_URI = os.getenv('MONGO_URI')
 DB_NAME = os.getenv('DB_NAME')
 COLLECTION_NAME = os.getenv('COLLECTION_NAME')
@@ -38,8 +38,8 @@ def enviar_para_nuvem():
 
         # ESTRATÉGIA DE REFRESH:
         # Apaga os dados antigos para não duplicar e insere os novos atualizados
-        result_delete = collection.delete_many({})
-        print(f"🧹 Limpeza: {result_delete.deleted_count} documentos antigos removidos.")
+        #result_delete = collection.delete_many({})
+        #print(f"🧹 Limpeza: {result_delete.deleted_count} documentos antigos removidos.")
 
         if dados:
             result_insert = collection.insert_many(dados)

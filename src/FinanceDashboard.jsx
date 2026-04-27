@@ -20,14 +20,15 @@ import { ComparativeTable } from './components/dashboard/ComparativeTable';
 import { MonthlyDreTable } from './components/dashboard/MonthlyDreTable';
 
 export default function FinanceDashboard() {
+  const [filtroAno, setFiltroAno] = useState('2026'); // Novo estado de ano
   const [filtroMes, setFiltroMes] = useState('Anual'); 
   const [mesComparacao, setMesComparacao] = useState('NENHUM'); 
   const [filtroPosto, setFiltroPosto] = useState('GTB'); 
   const [activeTab, setActiveTab] = useState('DASHBOARD');
   const [filtroStatus, setFiltroStatus] = useState('TODOS'); 
 
-
-  const { dadosGraficoTempo, totais, rankingPostos,listaPostos, loading,dadosBrutos } = useFinanceData(filtroPosto, filtroMes);
+  // Hook atualizado recebendo filtroAno
+  const { dadosGraficoTempo, totais, rankingPostos, listaPostos, loading, dadosBrutos } = useFinanceData(filtroPosto, filtroMes, filtroAno);
 
   const dadosParaGraficos = useMemo(() => {
     if (mesComparacao === 'NENHUM' || filtroMes === 'Anual') {
@@ -74,6 +75,15 @@ export default function FinanceDashboard() {
            </div>
 
            <div className="flex flex-wrap gap-2 w-full md:w-auto order-1 md:order-2">
+             
+             {/* FILTRO DE ANO ADICIONADO AQUI */}
+             <div className="flex bg-white p-1 rounded-xl border border-gray-200 shadow-sm flex-1 md:flex-none min-w-[100px]">
+                <select value={filtroAno} onChange={(e) => setFiltroAno(e.target.value)} className="bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer p-2 w-full">
+                  <option value="2026">2026</option>
+                  <option value="2025">2025</option>
+                </select>
+             </div>
+
              <div className="bg-white p-1 rounded-xl border border-gray-200 shadow-sm flex items-center flex-1 md:flex-none min-w-[140px]">
                 <MapPin size={16} className="ml-2 text-slate-400"/>
                 <select value={filtroPosto} onChange={(e) => setFiltroPosto(e.target.value)} className="bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer p-2 w-full">
@@ -91,13 +101,14 @@ export default function FinanceDashboard() {
                   }} 
                   className="bg-transparent text-sm font-semibold text-slate-600 outline-none cursor-pointer px-2 w-full hover:text-blue-600"
                 >
-                  <option value="Anual">2025 (Anual)</option>
+                  <option value="Anual">{filtroAno} (Anual)</option>
+                  <option value="Ultimos6">Últimos 6 Meses</option>
                   <hr/>
                   {MESES.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
              </div>
 
-             {filtroMes !== 'Anual' && (
+             {filtroMes !== 'Anual' && filtroMes !== 'Ultimos6' && (
                <div className="flex items-center bg-blue-50 p-1 rounded-xl border border-blue-100 shadow-sm flex-1 md:flex-none animate-in fade-in slide-in-from-right-4">
                   <div className="px-2 text-blue-400"><ArrowRightLeft size={14}/></div>
                   <select 
@@ -156,7 +167,6 @@ export default function FinanceDashboard() {
            
            {/* --- ANÁLISE DE DESPESAS --- */}
            <div className="mt-8 border-t border-gray-200 pt-6">
-               {/* ... (Conteúdo de despesas mantido igual) ... */}
                <div className="mb-6 flex justify-between items-end">
                   <div>
                     <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -202,8 +212,7 @@ export default function FinanceDashboard() {
                         isPercent 
                     />
                     
-                    {/* MAIOR DESPESA PESSOAL (ALTERADO DE MENOR PARA MAIOR) */}
-                    {/* Removemos o .reverse() para mostrar os que mais gastam */}
+                    {/* MAIOR DESPESA PESSOAL */}
                     <MiniRankingCard 
                         title="Maior Despesa Pessoal" 
                         data={rankingPostos?.porPessoal || []} 
@@ -212,7 +221,7 @@ export default function FinanceDashboard() {
                         color="text-red-600" 
                     />
                     
-                    {/* MENOR CUSTO ENERGIA (Mantido Menor .reverse) */}
+                    {/* MENOR CUSTO ENERGIA */}
                     <MiniRankingCard 
                         title="Menor Custo Energia" 
                         data={[...(rankingPostos?.porEnergia || [])].reverse()} 
@@ -226,7 +235,6 @@ export default function FinanceDashboard() {
   
             <ComparativeTable 
               dados={rankingPostos?.dadosCompletos || []}
-              // AQUI ESTÁ A MÁGICA: Passamos todos os dados brutos para o modal filtrar
               todosDados={dadosBrutos} 
               onNavigateToProfile={(nomePosto) => {
                   setFiltroPosto(nomePosto);

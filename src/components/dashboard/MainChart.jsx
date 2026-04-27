@@ -18,8 +18,9 @@ export const MainChart = ({ data }) => (
         />
         <Legend wrapperStyle={{fontSize: '12px', paddingTop: '20px'}}/>
         
+        {/* AJUSTE AQUI: position="center" */}
         <Bar yAxisId="left" dataKey="receita_bruta" barSize={60} fill="#93c5fd" radius={[4, 4, 0, 0]} name="Receita">
-          <LabelList dataKey="receita_bruta" position="insideTop" offset={10} formatter={formatCompact} style={{ fill: '#000000', fontSize: '11px', fontWeight: 'bold' }} />
+          <LabelList dataKey="receita_bruta" position="center" formatter={formatCompact} style={{ fill: '#000000', fontSize: '11px', fontWeight: 'bold' }} />
         </Bar>
         
         <Line yAxisId="right" type="linear" dataKey="lucro_liquido" stroke="#16a34a" strokeWidth={3} dot={{r: 4, fill: '#16a34a', strokeWidth: 2, stroke: '#fff'}} name="Margem Líquida">

@@ -24,7 +24,6 @@ const ExpandableRow = ({
         className={`border-b border-gray-100 transition-colors cursor-pointer ${bgColor} ${hasChildren ? 'hover:brightness-95' : ''}`}
         onClick={() => hasChildren && setIsOpen(!isOpen)}
       >
-        {/* Adicionei 'bg-inherit' para garantir que herde a cor sólida da linha ou use a bgColor diretamente se ela for aplicada aqui */}
         <td className={`p-3 text-sm whitespace-nowrap sticky left-0 z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${bgColor} ${isBold ? 'font-bold' : 'font-medium'} ${colorClass}`}>
           <div className="flex items-center gap-2">
             {hasChildren && (
@@ -52,7 +51,6 @@ const ExpandableRow = ({
       {/* LINHAS FILHAS */}
       {isOpen && subRows.map((sub, idx) => (
         <tr key={idx} className="bg-slate-50 border-b border-slate-200 animate-in fade-in slide-in-from-top-1">
-          {/* bg-slate-50 JÁ É SÓLIDO, ENTÃO AQUI ESTAVA OK */}
           <td className="p-2 pl-10 text-xs text-slate-600 font-medium sticky left-0 z-10 bg-slate-50 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
             {sub.label}
           </td>
@@ -158,28 +156,9 @@ export const MonthlyDreTable = ({ data }) => {
   const resultadoNaoOp = data.map((_, i) => naoOpRec[i] - Math.abs(naoOpDesp[i]));
 
   // --- 9. IMPOSTOS ---
-  const impTaxas = data.map(d => v(d.taxas_multas));
-  const impCredito = data.map(d => v(d.credito_impostos));
-  const impPausados = data.map(d => v(d.impostos_pausados));
-
-  const indexSetembro = monthNames.findIndex(name => 
-    name.toLowerCase().includes('set')
-  );
-
-  const impostosTotal = data.map((_, i) => {
-    if (indexSetembro !== -1 && i > indexSetembro) {
-      const somaBase = Math.abs(impTaxas[i]) + Math.abs(impPausados[i]);
-      return somaBase; 
-    }
-    const somaBase = Math.abs(impTaxas[i]) + Math.abs(impPausados[i]);
-    const credito = Math.abs(impCredito[i]);
-    return somaBase - credito;
-  });
-
-  // --- 10. LUCRO LÍQUIDO FINAL ---
-  const lucroLiquido = data.map((d, i) => {
-    return margemOperacional[i] + resultadoFinanceiro[i] + resultadoNaoOp[i] - impostosTotal[i];
-  });
+const impostosTotal = data.map(d => Math.abs(v(d.taxas_multas)))
+  // --- 10. LUCRO LÍQUIDO FINAL (CORRIGIDO PARA LER O VALOR REAL DO BANCO) ---
+  const lucroLiquido = data.map(d => v(d.lucro_liquido)); // Puxa direto da fonte em vez de calcular!
   
   const lucroLiquidoPercent = lucroLiquido.map((l, i) => receitaBruta[i] ? (l / receitaBruta[i]) * 100 : 0);
 
@@ -207,7 +186,7 @@ export const MonthlyDreTable = ({ data }) => {
           </thead>
           <tbody>
             
-            {/* 1. RECEITA - Mudei de bg-sky-200/50 para bg-sky-100 (Sólido) */}
+            {/* 1. RECEITA */}
             <ExpandableRow 
               label="RECEITA BRUTA" 
               mainValues={receitaBruta} 
@@ -221,7 +200,7 @@ export const MonthlyDreTable = ({ data }) => {
               ]}
             />
 
-            {/* 2. CMV - Mudei de bg-orange-100/50 para bg-orange-50 (Sólido) */}
+            {/* 2. CMV */}
             <ExpandableRow 
               label="(-) CMV" 
               mainValues={cmvTotal} 
@@ -236,9 +215,8 @@ export const MonthlyDreTable = ({ data }) => {
               ]}
             />
 
-            {/* 3. MARGEM BRUTA - Mudei para cores sólidas */}
+            {/* 3. MARGEM BRUTA */}
             <tr className="bg-sky-200 border-y border-sky-300">
-               {/* Removido /90, agora é sólido */}
                <td className="p-3 text-sm font-black text-slate-900 sticky left-0 z-10 bg-sky-200 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
                  MARGEM BRUTA
                </td>
@@ -252,7 +230,7 @@ export const MonthlyDreTable = ({ data }) => {
                ))}
             </tr>
 
-            {/* 4. DESPESAS OPERACIONAIS - Mudei de bg-orange-200/50 para bg-orange-100 (Sólido) */}
+            {/* 4. DESPESAS OPERACIONAIS */}
             <ExpandableRow 
               label="DESPESAS OPERACIONAIS" 
               mainValues={despOperacionais} 
@@ -272,7 +250,7 @@ export const MonthlyDreTable = ({ data }) => {
               ]}
             />
 
-            {/* 5. PESSOAL - Mudei de bg-orange-200/50 para bg-orange-100 (Sólido) */}
+            {/* 5. PESSOAL */}
             <ExpandableRow 
               label="PESSOAL" 
               mainValues={despPessoal} 
@@ -292,9 +270,8 @@ export const MonthlyDreTable = ({ data }) => {
               ]}
             />
 
-             {/* 6. MARGEM OPERACIONAL - Cores sólidas */}
+             {/* 6. MARGEM OPERACIONAL */}
              <tr className="bg-sky-100 border-y border-sky-300">
-               {/* Removido /90, agora é sólido */}
                <td className="p-3 text-sm font-black text-slate-900 sticky left-0 z-10 bg-sky-100 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
                  MARGEM OPERACIONAL
                </td>
@@ -308,7 +285,7 @@ export const MonthlyDreTable = ({ data }) => {
                ))}
             </tr>
 
-            {/* 7. FINANCEIRO - Mudei de bg-orange-100/40 para bg-orange-50 (Sólido) */}
+            {/* 7. FINANCEIRO */}
             <ExpandableRow 
               label="REC & DESP FINANCEIRAS" 
               mainValues={resultadoFinanceiro} 
@@ -324,7 +301,7 @@ export const MonthlyDreTable = ({ data }) => {
               ]}
             />
 
-            {/* 8. NÃO OPERACIONAL - Mudei para sólido */}
+            {/* 8. NÃO OPERACIONAL */}
             <ExpandableRow 
               label="REC & DESP NÃO OPERACIO" 
               mainValues={resultadoNaoOp} 
@@ -337,7 +314,7 @@ export const MonthlyDreTable = ({ data }) => {
               ]}
             />
 
-            {/* 9. IMPOSTOS - Mudei para sólido */}
+            {/* 9. IMPOSTOS */}
             <ExpandableRow 
               label="IMPOSTOS" 
               mainValues={impostosTotal} 
@@ -348,7 +325,7 @@ export const MonthlyDreTable = ({ data }) => {
               
             />
 
-            {/* 10. LUCRO LÍQUIDO - Já era sólido (bg-cyan-200), mantido */}
+            {/* 10. LUCRO LÍQUIDO */}
             <tr className="bg-cyan-200 border-t-2 border-cyan-300">
                <td className="p-3 text-sm font-black text-slate-900 sticky left-0 z-10 bg-cyan-200 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
                  MARGEM LÍQUIDA

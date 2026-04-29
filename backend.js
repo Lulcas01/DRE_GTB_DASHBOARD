@@ -62,7 +62,7 @@ const Transferencia = mongoose.model("Transferencia", transferenciaSchema);
 // ======================================================
 
 const MAPA_POSTOS_CNPJ = {
-  "03545887000191": "FLEMING",
+  "03545887000191": "AEROTOWN",
   "02236460000149": "AIMEE",
   "29035826000178": "AMÉRICAS",
   "09070975000160": "AMIGO DA RODOVIA",
@@ -135,6 +135,29 @@ const MAPA_POSTOS_CNPJ = {
   "05863434000139": "VILAR",
   "02454272000197": "VIP",
   "03995690000154": "WM DO LOCAL"
+};
+
+const MAPA_FORNECEDORES_CNPJ = {
+  "34274233009584": "VIBRA ENERGIA S.A",
+  "10775497000254": "FLAGLER COMBUSTIVEIS S/A",
+  "01387400001993": "SP INDUSTRIA E DISTRIBUIDORA DE PETROLEO LTDA",
+  "33938119000169": "CIA DISTRIBUIDORA DE GAS DO RIO DE JANEIRO",
+  "05411176000311": "PARANAPANEMA DISTRIBUIDORA DE COMBUSTIVEIS LTDA",
+  "21559337000103": "SANTOS FRANCA COMERCIO DE COMBUSTIVEIS LTDA",
+  "05759383000108": "TOBRAS DISTRIBUIDORA DE COMBUSTIVEIS LTDA",
+  "32704431000125": "URCA COMERCIALIZADORA DE GAS NATURAL S/A",
+  "05068412000187": "RODOPETRO DISTRIBUIDORA DE PETROLEO LTDA",
+  "00209895000926": "RDP ENERGIA LTDA",
+  "42321262000106": "SAINT-TROPEZ FUNDO DE INVESTIMENTO EM DIREITOS CREDITORIOS",
+  "41967089000147": "CARINTHIA DISTRIBUIDORA S.A.",
+  "11989750000154": "76 OIL DISTRIBUIDORA DE COMBUSTIVEIS S/A",
+  "00756149000871": "RUFF CJ DISTRIBUIDORA DE PETROLEO LTDA",
+  "06031802000145": "MINUANO PETROLEO LTDA",
+  "71770689000424": "NEXTA DISTRIBUIDORA LTDA",
+  "33453598017794": "RAIZEN S.A.",
+  "02461767000143": "TOTALENERGIES DISTRIBUIDORA BRASIL",
+  "33823764000136": "ECONOMY DISTRIBUIDORA DE PETROLEO LTDA",
+  "60755519000101": "USIQUIMICA DO BRASIL LTDA"
 };
 
 const RESPONSAVEIS_CONTAS = {
@@ -306,14 +329,28 @@ function identificarProduto(texto) {
   return "Outros"; 
 }
 
-function identificarCategoriaCombustivel(texto) {
-  const ehCombustivel = PALAVRAS_COMBUSTIVEL.some(p => texto.includes(p));
+function identificarCategoriaCombustivel(textoCru) {
+  const ehCombustivel = PALAVRAS_COMBUSTIVEL.some(p => textoCru.includes(p));
   if (!ehCombustivel) return "Outros";
 
-  for (const fornecedor of FORNECEDORES_COMBUSTIVEL) {
-    const regex = new RegExp(`\\b${fornecedor}\\b`, "i");
-    if (regex.test(texto)) return fornecedor.toUpperCase();
+  const apenasNumeros = textoCru ? textoCru.replace(/\D/g, '') : '';
+  const textoLimpo = normalizarTexto(textoCru);
+
+  // 1º Tenta por CNPJ (Identificação exata)
+  for (const [cnpj, nomeFornecedor] of Object.entries(MAPA_FORNECEDORES_CNPJ)) {
+    if (apenasNumeros.includes(cnpj)) {
+      return nomeFornecedor.toUpperCase();
+    }
   }
+
+  // 2º Fallback por Nome (Se o CNPJ não estiver no mapa)
+  for (const fornecedor of FORNECEDORES_COMBUSTIVEL) {
+    const regex = new RegExp(`\\b${normalizarTexto(fornecedor)}\\b`, "i");
+    if (regex.test(textoLimpo)) {
+      return fornecedor.toUpperCase();
+    }
+  }
+
   return "Combustível";
 }
 
@@ -770,61 +807,80 @@ app.put('/api/contas/:id/baixar', async (req, res) => {
 // ROTA TEMPORÁRIA: REPROCESSAR PRODUTOS (S10, ETANOL, ETC)
 // ======================================================
 app.get('/api/notas/admin/reprocessar', async (req, res) => {
-  console.log("Iniciando reprocessamento das notas...");
+  console.log("🚀 Iniciando reprocessamento para identificar fornecedores pelo CNPJ...");
   
   try {
     const db = mongoose.connection.db;
     const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
     
-    // Pega todas as notas salvas no banco
-    const arquivos = await db.collection('notasFiscais.files').find({}).toArray();
+    // 1. Filtramos apenas o que está como "Combustível" genérico para ser mais rápido
+    const arquivos = await db.collection('notasFiscais.files').find({ 
+      "metadata.categoria": "Combustível" 
+    }).toArray();
+
     let atualizadas = 0;
     let erros = 0;
 
-    res.write("Reprocessamento iniciado. Acompanhe no terminal do servidor...\n");
+    res.write(`Encontradas ${arquivos.length} notas para reprocessar...\n`);
 
     for (const arquivo of arquivos) {
       try {
-        // Baixa o buffer do PDF do GridFS
         const downloadStream = bucket.openDownloadStream(arquivo._id);
         const chunks = [];
-        
-        for await (const chunk of downloadStream) {
-          chunks.push(chunk);
-        }
+        for await (const chunk of downloadStream) { chunks.push(chunk); }
         const fileBuffer = Buffer.concat(chunks);
 
-        // Lê o texto do PDF novamente
         const parser = new PDFParse(new Uint8Array(fileBuffer));
         const resultado = await parser.getText();
         const textoCru = normalizarTexto(resultado.text).replace(/\s+/g, ' ');
 
-        // Passa no seu novo filtro melhorado
+        // 2. Aplicamos as suas novas lógicas blindadas
+        const novaCategoria = identificarCategoriaCombustivel(textoCru);
         const novoProduto = identificarProduto(textoCru);
-        const produtoAntigo = arquivo.metadata.produto;
 
-        // Se o produto mudou, atualiza no banco
-        if (novoProduto !== produtoAntigo) {
+        const alterouCategoria = novaCategoria !== arquivo.metadata.categoria;
+        const alterouProduto = novoProduto !== arquivo.metadata.produto;
+
+        // 3. Se algo mudou (especialmente a categoria), atualizamos o banco
+        if (alterouCategoria || alterouProduto) {
           await db.collection('notasFiscais.files').updateOne(
             { _id: arquivo._id },
-            { $set: { "metadata.produto": novoProduto } }
+            { 
+              $set: { 
+                "metadata.categoria": novaCategoria,
+                "metadata.produto": novoProduto
+              } 
+            }
           );
-          console.log(`🔄 Atualizado: ${arquivo.filename} | De: ${produtoAntigo} -> Para: ${novoProduto}`);
+          console.log(`✅ Sucesso: ${arquivo.filename} | Novo Fornecedor: ${novaCategoria}`);
           atualizadas++;
         }
       } catch (err) {
-        console.error(`❌ Erro ao reprocessar arquivo ${arquivo._id}:`, err);
+        console.error(`❌ Erro no arquivo ${arquivo._id}:`, err);
         erros++;
       }
     }
 
-    const mensagemFinal = `\n✅ Processo concluído! Notas atualizadas: ${atualizadas}. Erros: ${erros}.`;
-    console.log(mensagemFinal);
-    res.end(mensagemFinal);
+    const msg = `\n✅ Processo concluído! Notas corrigidas: ${atualizadas}. Erros: ${erros}.`;
+    console.log(msg);
+    res.end(msg);
 
   } catch (error) {
     console.error("Erro geral no reprocessamento:", error);
     res.status(500).end("\nErro interno ao tentar reprocessar.");
+  }
+});
+
+app.get('/api/admin/migrar-fleming', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const resultado = await db.collection('notasFiscais.files').updateMany(
+      { "metadata.posto": "FLEMING" },
+      { $set: { "metadata.posto": "AEROTOWN" } }
+    );
+    res.json({ mensagem: "Migração concluída!", atualizadas: resultado.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ error: "Erro na migração." });
   }
 });
 

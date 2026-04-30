@@ -358,7 +358,7 @@ function identificarCategoriaCombustivel(textoCru) {
 // MIDDLEWARES DE ROTAS
 // ======================================================
 app.use(cors({
-    origin: ['http://localhost:5173', process.env.CLIENT_URL, 'http://localhost:3000', process.env.CLIENT_URL2, "https://pedidosgtb1.netlify.app"],
+    origin: ['http://localhost:5173', process.env.CLIENT_URL, 'http://localhost:3000', process.env.CLIENT_URL2, "https://pedidosgtb1.netlify.app",process.env.CLIENT_URL3,"https://dashboardgtb.netlify.app"],
     credentials: true
 }));
 

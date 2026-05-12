@@ -4,7 +4,9 @@ import { ChevronRight } from 'lucide-react';
 
 const ExpandableRow = ({ 
   label, 
-  mainValues, 
+  mainValues,
+  mainPercents = null, // <-- NOVO: Recebe o array de porcentagens
+  percentColor = "text-red-600", // <-- NOVO: Cor padrão para a porcentagem
   subRows = [], 
   isHeader = false, 
   isBold = false, 
@@ -41,8 +43,18 @@ const ExpandableRow = ({
           
           return (
             <td key={idx} className={`p-3 text-right text-sm whitespace-nowrap min-w-[110px] ${finalColor} ${isBold ? 'font-bold' : ''}`}>
-              {isNegative && Math.abs(val) > 0 ? '-' : ''}
-              {formatCompact(Math.abs(val))}
+              {/* --- MODIFICADO: Layout em coluna para caber a porcentagem --- */}
+              <div className="flex flex-col items-end">
+                <span>
+                  {isNegative && Math.abs(val) > 0 ? '-' : ''}
+                  {formatCompact(Math.abs(val))}
+                </span>
+                {mainPercents && (
+                  <span className={`text-[11px] font-bold ${percentColor}`}>
+                    -{mainPercents[idx].toFixed(1)}%
+                  </span>
+                )}
+              </div>
             </td>
           );
         })}
@@ -100,6 +112,8 @@ export const MonthlyDreTable = ({ data }) => {
     return Math.abs(dbVal) > 1 ? Math.abs(dbVal) : Math.abs(sum);
   });
 
+  const cmvPercent = cmvTotal.map((c, i) => receitaBruta[i] ? (c / receitaBruta[i]) * 100 : 0);
+  
   // --- 3. MARGEM BRUTA ---
   const margemBruta = receitaBruta.map((r, i) => r - cmvTotal[i]);
   const margemBrutaPercent = margemBruta.map((m, i) => receitaBruta[i] ? (m / receitaBruta[i]) * 100 : 0);
@@ -205,6 +219,8 @@ const impostosTotal = data.map(d => Math.abs(v(d.taxas_multas)))
               label="(-) CMV" 
               mainValues={cmvTotal} 
               isNegative 
+              mainPercents={cmvPercent}       // <-- PASSA A PORCENTAGEM AQUI
+              percentColor="text-red-600"
               colorClass="text-slate-800"
               bgColor="bg-orange-50" 
               subRows={[
@@ -224,7 +240,7 @@ const impostosTotal = data.map(d => Math.abs(v(d.taxas_multas)))
                  <td key={i} className="p-3 text-right text-sm font-black text-slate-900">
                    <div className="flex flex-col items-end">
                      <span>{formatCompact(v)}</span>
-                     <span className="text-[10px] font-bold opacity-80">{margemBrutaPercent[i].toFixed(0)}%</span>
+                     <span className="text-[11px] font-bold opacity-80">{margemBrutaPercent[i].toFixed(0)}%</span>
                    </div>
                  </td>
                ))}
@@ -279,7 +295,7 @@ const impostosTotal = data.map(d => Math.abs(v(d.taxas_multas)))
                  <td key={i} className="p-3 text-right text-sm font-black text-slate-900">
                     <div className="flex flex-col items-end">
                       <span>{formatCompact(v)}</span>
-                      <span className="text-[10px] font-bold opacity-80">{margemOperacionalPercent[i].toFixed(1)}%</span>
+                      <span className="text-[11px] font-bold opacity-80">{margemOperacionalPercent[i].toFixed(1)}%</span>
                     </div>
                  </td>
                ))}
@@ -334,7 +350,7 @@ const impostosTotal = data.map(d => Math.abs(v(d.taxas_multas)))
                  <td key={i} className="p-3 text-right text-sm font-black text-slate-900">
                    <div className="flex flex-col items-end">
                      <span>{formatMoney(v)}</span>
-                     <span className="text-[10px] font-bold opacity-80">{lucroLiquidoPercent[i].toFixed(1)}%</span>
+                     <span className="text-[11px] font-bold opacity-80">{lucroLiquidoPercent[i].toFixed(1)}%</span>
                    </div>
                  </td>
                ))}

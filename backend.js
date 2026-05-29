@@ -36,6 +36,7 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log("✅ Conectado ao MongoDB Atlas via Mongoose"))
   .catch((err) => console.error("❌ Erro ao conectar no MongoDB via Mongoose:", err));
 
+
 const transferenciaSchema = new mongoose.Schema({
   data: String,
   ip: String,
@@ -362,7 +363,9 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(express.json());
+  // Aumentando o limite para 50 Megabytes
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cookieParser());
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -871,17 +874,78 @@ app.get('/api/notas/admin/reprocessar', async (req, res) => {
   }
 });
 
-app.get('/api/admin/migrar-fleming', async (req, res) => {
-  try {
-    const db = mongoose.connection.db;
-    const resultado = await db.collection('notasFiscais.files').updateMany(
-      { "metadata.posto": "FLEMING" },
-      { $set: { "metadata.posto": "AEROTOWN" } }
-    );
-    res.json({ mensagem: "Migração concluída!", atualizadas: resultado.modifiedCount });
-  } catch (error) {
-    res.status(500).json({ error: "Erro na migração." });
-  }
+
+//################ DASHBOARD DE VENDAS ################
+// 2. ROTA POST 2026: Rota onde o seu script Python vai mandar a carga diária de 2026
+app.post('/api/dashboard/SalvarDadosVendas2026', async (req, res) => {
+    let client;
+    try {
+        client = new MongoClient(MONGO_URI);
+        await client.connect();
+        const db = client.db(DB_NAME);
+        const collection = db.collection("vendas_dashboard_2026");
+
+        // Limpa apenas o ano corrente (2026) e reinsere a atualização do Python
+        await collection.deleteMany({});
+        if (req.body && req.body.length > 0) {
+            await collection.insertMany(req.body);
+        }
+        res.status(200).json({ message: "✅ Vendas de 2026 atualizadas com sucesso!" });
+    } catch (error) {
+        res.status(500).json({ error: "Erro interno ao atualizar dados de 2026." });
+    } finally {
+        if (client) client.close();
+    }
+});
+
+// 3. ROTA GET UNIFICADA: O React vai bater aqui e receber a fusão perfeita de 2025 + 2026
+app.get('/api/dashboard/BuscarDadosVendas', async (req, res) => {
+    let client;
+    try {
+        client = new MongoClient(MONGO_URI);
+        await client.connect();
+        const db = client.db(DB_NAME);
+        
+        // Busca os dados das duas coleções separadas
+        const dados2025 = await db.collection("vendas_dashboard_2025").find({}).project({_id: 0}).toArray();
+        const dados2026 = await db.collection("vendas_dashboard_2026").find({}).project({_id: 0}).toArray();
+
+        // Faz o mapeamento e fusão dos dados direto no servidor
+        const mapaPostos = new Map();
+
+        dados2025.forEach((posto) => {
+            mapaPostos.set(posto.empresa, { 
+                ...posto, 
+                detalhes: [...(posto.detalhes || [])] 
+            });
+        });
+
+        dados2026.forEach((postoNovo) => {
+            if (mapaPostos.has(postoNovo.empresa)) {
+                const postoExistente = mapaPostos.get(postoNovo.empresa);
+                const mapaMeses = new Map();
+                
+                postoExistente.detalhes.forEach(m => mapaMeses.set(m.mes, m));
+                (postoNovo.detalhes || []).forEach(m => mapaMeses.set(m.mes, m));
+                
+                postoExistente.detalhes = Array.from(mapaMeses.values());
+            } else {
+                mapaPostos.set(postoNovo.empresa, { 
+                    ...postoNovo, 
+                    detalhes: [...(postoNovo.detalhes || [])] 
+                });
+            }
+        });
+
+        const dadosUnificados = Array.from(mapaPostos.values());
+        res.json(dadosUnificados);
+
+    } catch (error) {
+        console.error("Erro ao fundir dados de vendas:", error);
+        res.status(500).json({ error: "Erro ao buscar dados consolidados" });
+    } finally {
+        if (client) client.close();
+    }
 });
 
 // ======================================================

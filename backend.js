@@ -58,6 +58,43 @@ const transferenciaSchema = new mongoose.Schema({
 
 const Transferencia = mongoose.model("Transferencia", transferenciaSchema);
 
+
+// ======================================================
+// ESQUEMAS: RESCISÃO E FALTAS DO CAIXA
+// ======================================================
+const rescisaoSchema = new mongoose.Schema({
+  posto: String,
+  auditoria: String,
+  saida: String,
+  prioridade: String,
+  descricao: String,
+  validacao: String,
+  criadoEm: String
+});
+
+const FaltaSchema = new mongoose.Schema({
+  codlancamento: Number,
+  data: String,
+  empresa: String,
+  empcodigo: Number,
+  caixa: Number,
+  valor: Number,
+  responsavelcaixa: String,
+  codcliente: Number,
+  cliente: String,
+  obs: String,
+  correcao_fluxo: Number,
+  adiantamento: Number,
+  vale: Number,
+  parcial: Number,
+  total: Number,
+  postoFiltro: String,
+  nome_funcionario: String
+});
+
+const Rescisao = mongoose.model("Rescisao", rescisaoSchema);
+const Falta = mongoose.model("Falta", FaltaSchema);
+
 // ======================================================
 // DICIONÁRIOS UNIFICADOS
 // ======================================================
@@ -948,6 +985,151 @@ app.get('/api/dashboard/BuscarDadosVendas', async (req, res) => {
     }
 });
 
+
+
+// ======================================================
+// ROTAS DE RESCISÃO
+// ======================================================
+
+// 1. Criar nova Rescisão (Adicionar Linha)
+app.post("/api/rescisao", async (req, res) => {
+  try {
+    const novaRescisao = new Rescisao(req.body);
+    await novaRescisao.save();
+    res.status(201).json({ message: "✅ Rescisão criada", rescisao: novaRescisao });
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao salvar rescisão" });
+  }
+});
+
+// 2. Buscar todas as Rescisões (Ler a tabela)
+app.get("/api/rescisao", async (req, res) => {
+  try {
+    const rescisoes = await Rescisao.find();
+    res.json(rescisoes);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao buscar rescisões" });
+  }
+});
+
+// 3. Atualizar Status da Rescisão (Auditoria / Validação DP)
+app.put("/api/rescisao/:id", async (req, res) => {
+  try {
+    const rescisaoAtualizada = await Rescisao.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(rescisaoAtualizada);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao atualizar rescisão" });
+  }
+});
+
+// 4. Excluir Rescisão (Lixeira)
+app.delete("/api/rescisao/:id", async (req, res) => {
+  try {
+    await Rescisao.findByIdAndDelete(req.params.id);
+    res.json({ message: "🗑️ Rescisão deletada com sucesso" });
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao deletar rescisão" });
+  }
+});
+
+// ======================================================
+// ROTA DE FALTAS DE CAIXA
+// ======================================================
+
+// Busca todas as faltas (A inserção delas via Excel a gente faz depois numa rota de upload)
+app.get("/api/faltas", async (req, res) => {
+  try {
+    const faltas = await Falta.find();
+    res.json(faltas);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao buscar faltas" });
+  }
+});
+
+app.get("/api/rescisao-historico", async (req, res) => {
+  try {
+    const dataAtual = new Date();
+    const hojePrefixo = `${dataAtual.getDate()} de ${dataAtual.toLocaleString('pt-BR', { month: 'long' })} de ${dataAtual.getFullYear()}`;
+    
+    // Deleta do banco tudo que a dataExclusao NÃO começar com a data de hoje
+    await HistoricoExclusao.deleteMany({ dataExclusao: { $not: new RegExp('^' + hojePrefixo) } });
+
+    const historico = await HistoricoExclusao.find().sort({ _id: -1 });
+    res.json(historico);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao buscar histórico" });
+  }
+});
+
+// Permite apagar um item da lixeira permanentemente
+app.delete("/api/rescisao-historico/:id", async (req, res) => {
+  try {
+    await HistoricoExclusao.findByIdAndDelete(req.params.id);
+    res.json({ message: "Apagado permanentemente." });
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao apagar do histórico" });
+  }
+});
+
+// ======================================================
+// ROTA: UPLOAD E SINCRONIZAÇÃO DA PLANILHA DE FALTAS
+// ======================================================
+app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
+
+    // 1. Lê o arquivo Excel/CSV direto da memória
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const dadosJson = xlsx.utils.sheet_to_json(sheet);
+
+    // 2. Limpa e formata os dados para o padrão da nossa tela
+    const faltasParaSalvar = dadosJson.map(linha => {
+      
+      const clienteStr = linha.cliente || "";
+      
+      // MÁGICA 1: Pega "INATIVO FABIANO BARROS_AEROTOWN" e transforma só em "FABIANO BARROS"
+      let nomeLimpo = clienteStr.replace(/^INATIVO\s+/i, '').replace(/_[a-zA-Z0-9]+$/i, '').trim();
+      
+      // MÁGICA 2: Descobre de qual posto é a falta pegando a palavra depois do "_" no nome do cliente
+      const partes = clienteStr.split('_');
+      let postoIdentificado = partes.length > 1 ? partes[partes.length - 1].trim().toUpperCase() : "AEROTOWN";
+
+      return {
+        codlancamento: linha.codlancamento || 0,
+        data: linha.data || "",
+        empresa: linha.empresa || "",
+        empcodigo: linha.empcodigo || 0,
+        caixa: linha.caixa || 0,
+        valor: parseFloat(linha.valor) || 0,
+        responsavelcaixa: linha.responsavelcaixa || "",
+        codcliente: linha.codcliente || 0,
+        cliente: linha.cliente || "",
+        obs: linha.obs || "",
+        correcao_fluxo: parseFloat(linha.correcao_fluxo) || 0,
+        adiantamento: parseFloat(linha.adiantamento) || 0,
+        vale: parseFloat(linha.vale) || 0,
+        parcial: parseFloat(linha.parcial) || 0,
+        total: parseFloat(linha.total) || 0,
+        postoFiltro: postoIdentificado,
+        nome_funcionario: nomeLimpo
+      };
+    });
+
+    // 3. Deleta a base antiga inteira e insere a nova atualizada (Faxina + Update)
+    await Falta.deleteMany({});
+    if (faltasParaSalvar.length > 0) {
+      await Falta.insertMany(faltasParaSalvar);
+    }
+
+    console.log(`✅ Planilha de Faltas sincronizada: ${faltasParaSalvar.length} linhas.`);
+    res.json({ message: "Planilha sincronizada com sucesso!", total: faltasParaSalvar.length });
+  } catch (error) {
+    console.error("Erro ao processar planilha de faltas:", error);
+    res.status(500).json({ error: "Erro ao processar a planilha." });
+  }
+});
 // ======================================================
 // INICIALIZAÇÃO DO SERVIDOR
 // ======================================================

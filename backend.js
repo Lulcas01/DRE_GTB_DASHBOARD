@@ -1040,35 +1040,94 @@ app.delete("/api/rescisao/:id", async (req, res) => {
 });
 
 // ======================================================
-// ROTA DE FALTAS DE CAIXA
+// ROTAS DE RESCISÃO E LIXEIRA
 // ======================================================
 
-// Busca todas as faltas (A inserção delas via Excel a gente faz depois numa rota de upload)
-app.get("/api/faltas", async (req, res) => {
+// 1. Criar nova Rescisão (Adicionar Linha)
+app.post("/api/rescisao", async (req, res) => {
   try {
-    const faltas = await Falta.find();
-    res.json(faltas);
+    const novaRescisao = new Rescisao(req.body);
+    await novaRescisao.save();
+    res.status(201).json({ message: "✅ Rescisão criada", rescisao: novaRescisao });
   } catch (error) {
-    res.status(500).json({ error: "Erro ao buscar faltas" });
+    res.status(500).json({ error: "Erro ao salvar rescisão" });
   }
 });
 
+// 2. Buscar todas as Rescisões (Ler a tabela)
+app.get("/api/rescisao", async (req, res) => {
+  try {
+    const rescisoes = await Rescisao.find();
+    res.json(rescisoes);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao buscar rescisões" });
+  }
+});
+
+// 3. Atualizar Status da Rescisão (Auditoria / Validação DP)
+app.put("/api/rescisao/:id", async (req, res) => {
+  try {
+    const rescisaoAtualizada = await Rescisao.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(rescisaoAtualizada);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao atualizar rescisão" });
+  }
+});
+
+// ======================================================
+// ROTAS DA LIXEIRA E HISTÓRICO
+// ======================================================
+
+// Busca o histórico e limpa exclusões de dias anteriores
 app.get("/api/rescisao-historico", async (req, res) => {
   try {
     const dataAtual = new Date();
-    const hojePrefixo = `${dataAtual.getDate()} de ${dataAtual.toLocaleString('pt-BR', { month: 'long' })} de ${dataAtual.getFullYear()}`;
-    
-    // Deleta do banco tudo que a dataExclusao NÃO começar com a data de hoje
-    await HistoricoExclusao.deleteMany({ dataExclusao: { $not: new RegExp('^' + hojePrefixo) } });
+    const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const mesNome = meses[dataAtual.getMonth()];
+    const stringHoje = `${dataAtual.getDate()} de ${mesNome} de ${dataAtual.getFullYear()}`;
+
+    // Apaga do banco tudo que NÃO tiver a data de hoje escrita no texto
+    await HistoricoExclusao.deleteMany({ dataExclusao: { $not: { $regex: stringHoje, $options: "i" } } });
 
     const historico = await HistoricoExclusao.find().sort({ _id: -1 });
     res.json(historico);
   } catch (error) {
+    console.error("Erro no historico:", error);
     res.status(500).json({ error: "Erro ao buscar histórico" });
   }
 });
 
-// Permite apagar um item da lixeira permanentemente
+// Deletar da tabela principal e mandar pra Lixeira
+app.delete("/api/rescisao/:id", async (req, res) => {
+  try {
+    const { usuario } = req.query;
+    const rescisao = await Rescisao.findById(req.params.id);
+
+    if (rescisao) {
+      const dataAtual = new Date();
+      const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+      const mesNome = meses[dataAtual.getMonth()];
+      const dataFormatada = `${dataAtual.getDate()} de ${mesNome} de ${dataAtual.getFullYear()} ${String(dataAtual.getHours()).padStart(2, '0')}:${String(dataAtual.getMinutes()).padStart(2, '0')}`;
+
+      const logExclusao = new HistoricoExclusao({
+        rescisaoOriginal: rescisao.toObject(),
+        excluidoPor: usuario || "Sistema",
+        dataExclusao: dataFormatada,
+        posto: rescisao.posto,
+        descricao: rescisao.descricao
+      });
+      await logExclusao.save();
+    }
+
+    await Rescisao.findByIdAndDelete(req.params.id);
+    res.json({ message: "Enviado para a lixeira!" });
+  } catch (error) {
+    console.error("Erro ao deletar:", error);
+    res.status(500).json({ error: "Erro ao deletar" });
+  }
+});
+
+// Apagar definitivamente da lixeira
 app.delete("/api/rescisao-historico/:id", async (req, res) => {
   try {
     await HistoricoExclusao.findByIdAndDelete(req.params.id);
@@ -1079,22 +1138,43 @@ app.delete("/api/rescisao-historico/:id", async (req, res) => {
 });
 
 // ======================================================
-// ROTA: UPLOAD E SINCRONIZAÇÃO DA PLANILHA DE FALTAS
+// ROTA DE FALTAS DE CAIXA
 // ======================================================
+
+// Busca todas as faltas já processadas pro Frontend
+app.get("/api/faltas", async (req, res) => {
+  try {
+    const faltas = await Falta.find();
+    res.json(faltas);
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao buscar faltas" });
+  }
+});
+
+// Upload e Sincronização da Planilha (CSV ou Excel)
 app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
 
-    // 1. Lê o arquivo Excel/CSV direto da memória
-    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    // Converte o arquivo recebido para texto caso seja um CSV para ler direito
+    let rawData = req.file.buffer;
+    let workbook;
+    
+    // Tratativa à prova de balas: Se for CSV, forçamos a biblioteca a olhar o separador correto
+    if (req.file.originalname.toLowerCase().endsWith('.csv')) {
+        const text = rawData.toString('latin1'); // O CSV do Windows costuma vir em latin1
+        workbook = xlsx.read(text, { type: 'string', raw: true });
+    } else {
+        workbook = xlsx.read(rawData, { type: 'buffer' });
+    }
+
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
     const dadosJson = xlsx.utils.sheet_to_json(sheet);
 
-    // 2. Limpa e formata os dados para o padrão da nossa tela
     const faltasParaSalvar = dadosJson.map(linha => {
-      
-      const clienteStr = linha.cliente || "";
+      // Pega o nome do cliente seja como for escrito na coluna do CSV (maiúsculo, minúsculo)
+      const clienteStr = linha.cliente || linha.CLIENTE || linha.Cliente || "";
       
       // MÁGICA 1: Pega "INATIVO FABIANO BARROS_AEROTOWN" e transforma só em "FABIANO BARROS"
       let nomeLimpo = clienteStr.replace(/^INATIVO\s+/i, '').replace(/_[a-zA-Z0-9]+$/i, '').trim();
@@ -1104,27 +1184,27 @@ app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
       let postoIdentificado = partes.length > 1 ? partes[partes.length - 1].trim().toUpperCase() : "AEROTOWN";
 
       return {
-        codlancamento: linha.codlancamento || 0,
-        data: linha.data || "",
-        empresa: linha.empresa || "",
-        empcodigo: linha.empcodigo || 0,
-        caixa: linha.caixa || 0,
-        valor: parseFloat(linha.valor) || 0,
-        responsavelcaixa: linha.responsavelcaixa || "",
-        codcliente: linha.codcliente || 0,
-        cliente: linha.cliente || "",
-        obs: linha.obs || "",
-        correcao_fluxo: parseFloat(linha.correcao_fluxo) || 0,
-        adiantamento: parseFloat(linha.adiantamento) || 0,
-        vale: parseFloat(linha.vale) || 0,
-        parcial: parseFloat(linha.parcial) || 0,
-        total: parseFloat(linha.total) || 0,
+        codlancamento: linha.codlancamento || linha.CODLANCAMENTO || 0,
+        data: linha.data || linha.DATA || "",
+        empresa: linha.empresa || linha.EMPRESA || "",
+        empcodigo: linha.empcodigo || linha.EMPCODIGO || 0,
+        caixa: linha.caixa || linha.CAIXA || 0,
+        valor: parseFloat(linha.valor || linha.VALOR) || 0,
+        responsavelcaixa: linha.responsavelcaixa || linha.RESPONSAVELCAIXA || "",
+        codcliente: linha.codcliente || linha.CODCLIENTE || 0,
+        cliente: clienteStr,
+        obs: linha.obs || linha.OBS || "",
+        correcao_fluxo: parseFloat(linha.correcao_fluxo || linha.CORRECAO_FLUXO) || 0,
+        adiantamento: parseFloat(linha.adiantamento || linha.ADIANTAMENTO) || 0,
+        vale: parseFloat(linha.vale || linha.VALE) || 0,
+        parcial: parseFloat(linha.parcial || linha.PARCIAL) || 0,
+        total: parseFloat(linha.total || linha.TOTAL) || 0,
         postoFiltro: postoIdentificado,
         nome_funcionario: nomeLimpo
       };
     });
 
-    // 3. Deleta a base antiga inteira e insere a nova atualizada (Faxina + Update)
+    // Deleta a base antiga inteira e insere a nova atualizada (Faxina + Update)
     await Falta.deleteMany({});
     if (faltasParaSalvar.length > 0) {
       await Falta.insertMany(faltasParaSalvar);

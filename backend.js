@@ -91,10 +91,17 @@ const FaltaSchema = new mongoose.Schema({
   postoFiltro: String,
   nome_funcionario: String
 });
+const historicoExclusaoSchema = new mongoose.Schema({
+  rescisaoOriginal: Object,
+  excluidoPor: String,
+  dataExclusao: String,
+  posto: String,
+  descricao: String
+});
 
 const Rescisao = mongoose.model("Rescisao", rescisaoSchema);
 const Falta = mongoose.model("Falta", FaltaSchema);
-
+const HistoricoExclusao = mongoose.models.HistoricoExclusao || mongoose.model("HistoricoExclusao", historicoExclusaoSchema);
 // ======================================================
 // DICIONÁRIOS UNIFICADOS
 // ======================================================

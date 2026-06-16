@@ -60,7 +60,7 @@ const Transferencia = mongoose.model("Transferencia", transferenciaSchema);
 
 
 // ======================================================
-// ESQUEMAS: RESCISÃO E FALTAS DO CAIXA
+// ESQUEMAS: RESCISÃO E FALTAS
 // ======================================================
 const rescisaoSchema = new mongoose.Schema({
   posto: String,
@@ -72,6 +72,15 @@ const rescisaoSchema = new mongoose.Schema({
   criadoEm: String
 });
 
+const historicoExclusaoSchema = new mongoose.Schema({
+  rescisaoOriginal: Object,
+  excluidoPor: String,
+  dataExclusao: String,
+  posto: String,
+  descricao: String
+});
+
+// A TABELA QUE FALTAVA!
 const FaltaSchema = new mongoose.Schema({
   codlancamento: Number,
   data: String,
@@ -91,17 +100,10 @@ const FaltaSchema = new mongoose.Schema({
   postoFiltro: String,
   nome_funcionario: String
 });
-const historicoExclusaoSchema = new mongoose.Schema({
-  rescisaoOriginal: Object,
-  excluidoPor: String,
-  dataExclusao: String,
-  posto: String,
-  descricao: String
-});
 
-const Rescisao = mongoose.model("Rescisao", rescisaoSchema);
-const Falta = mongoose.model("Falta", FaltaSchema);
+const Rescisao = mongoose.models.Rescisao || mongoose.model("Rescisao", rescisaoSchema);
 const HistoricoExclusao = mongoose.models.HistoricoExclusao || mongoose.model("HistoricoExclusao", historicoExclusaoSchema);
+const Falta = mongoose.models.Falta || mongoose.model("Falta", FaltaSchema);
 // ======================================================
 // DICIONÁRIOS UNIFICADOS
 // ======================================================
@@ -1138,60 +1140,68 @@ app.delete("/api/rescisao-historico/:id", async (req, res) => {
 });
 
 // ======================================================
-// ROTA DE FALTAS DE CAIXA
+// ROTA: UPLOAD E SINCRONIZAÇÃO DA PLANILHA DE FALTAS
 // ======================================================
-
-// Busca todas as faltas já processadas pro Frontend
-app.get("/api/faltas", async (req, res) => {
-  try {
-    const faltas = await Falta.find();
-    res.json(faltas);
-  } catch (error) {
-    res.status(500).json({ error: "Erro ao buscar faltas" });
-  }
-});
-
-// Upload e Sincronização da Planilha (CSV ou Excel)
 app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
 
-    // Converte o arquivo recebido para texto caso seja um CSV para ler direito
-    let rawData = req.file.buffer;
-    let workbook;
-    
-    // Tratativa à prova de balas: Se for CSV, forçamos a biblioteca a olhar o separador correto
-    if (req.file.originalname.toLowerCase().endsWith('.csv')) {
-        const text = rawData.toString('latin1'); // O CSV do Windows costuma vir em latin1
-        workbook = xlsx.read(text, { type: 'string', raw: true });
+    let dadosJson = [];
+    const isCSV = req.file.originalname.toLowerCase().endsWith('.csv');
+
+    if (isCSV) {
+      // 1. Leitor blindado para CSV brasileiro (com ponto e vírgula)
+      const text = req.file.buffer.toString('latin1'); 
+      const linhas = text.split(/\r?\n/);
+      const cabecalhos = linhas[0].split(';').map(c => c.trim().toLowerCase());
+      
+      if (cabecalhos.length > 1) { 
+        for (let i = 1; i < linhas.length; i++) {
+          if (!linhas[i].trim()) continue;
+          const valores = linhas[i].split(';');
+          let obj = {};
+          
+          cabecalhos.forEach((col, index) => {
+            let val = valores[index] ? valores[index].replace(/"/g, '').trim() : "";
+            // Converte vírgula pra ponto pra não quebrar no banco
+            if (['valor', 'correcao_fluxo', 'adiantamento', 'vale', 'parcial', 'total'].includes(col)) {
+                 val = val.replace(',', '.');
+            }
+            obj[col] = val;
+          });
+          dadosJson.push(obj);
+        }
+      } else {
+        // Fallback pro leitor padrao se não tiver ponto e vírgula
+        const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+        dadosJson = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+      }
     } else {
-        workbook = xlsx.read(rawData, { type: 'buffer' });
+      // Se for .xlsx mesmo
+      const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+      dadosJson = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
     }
 
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const dadosJson = xlsx.utils.sheet_to_json(sheet);
-
+    // 2. Limpa e formata os dados para o padrão da nossa tela
     const faltasParaSalvar = dadosJson.map(linha => {
-      // Pega o nome do cliente seja como for escrito na coluna do CSV (maiúsculo, minúsculo)
       const clienteStr = linha.cliente || linha.CLIENTE || linha.Cliente || "";
       
-      // MÁGICA 1: Pega "INATIVO FABIANO BARROS_AEROTOWN" e transforma só em "FABIANO BARROS"
+      // MÁGICA 1: Tira "INATIVO" e "_AEROTOWN" do nome
       let nomeLimpo = clienteStr.replace(/^INATIVO\s+/i, '').replace(/_[a-zA-Z0-9]+$/i, '').trim();
       
-      // MÁGICA 2: Descobre de qual posto é a falta pegando a palavra depois do "_" no nome do cliente
+      // MÁGICA 2: Descobre o posto pelo final do nome
       const partes = clienteStr.split('_');
       let postoIdentificado = partes.length > 1 ? partes[partes.length - 1].trim().toUpperCase() : "AEROTOWN";
 
       return {
-        codlancamento: linha.codlancamento || linha.CODLANCAMENTO || 0,
+        codlancamento: Number(linha.codlancamento || linha.CODLANCAMENTO) || 0,
         data: linha.data || linha.DATA || "",
         empresa: linha.empresa || linha.EMPRESA || "",
-        empcodigo: linha.empcodigo || linha.EMPCODIGO || 0,
-        caixa: linha.caixa || linha.CAIXA || 0,
+        empcodigo: Number(linha.empcodigo || linha.EMPCODIGO) || 0,
+        caixa: Number(linha.caixa || linha.CAIXA) || 0,
         valor: parseFloat(linha.valor || linha.VALOR) || 0,
         responsavelcaixa: linha.responsavelcaixa || linha.RESPONSAVELCAIXA || "",
-        codcliente: linha.codcliente || linha.CODCLIENTE || 0,
+        codcliente: Number(linha.codcliente || linha.CODCLIENTE) || 0,
         cliente: clienteStr,
         obs: linha.obs || linha.OBS || "",
         correcao_fluxo: parseFloat(linha.correcao_fluxo || linha.CORRECAO_FLUXO) || 0,
@@ -1204,7 +1214,7 @@ app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
       };
     });
 
-    // Deleta a base antiga inteira e insere a nova atualizada (Faxina + Update)
+    // 3. Deleta a base antiga inteira e insere a nova atualizada
     await Falta.deleteMany({});
     if (faltasParaSalvar.length > 0) {
       await Falta.insertMany(faltasParaSalvar);

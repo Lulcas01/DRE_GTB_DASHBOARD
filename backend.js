@@ -1083,18 +1083,10 @@ app.put("/api/rescisao/:id", async (req, res) => {
 // Busca o histórico e limpa exclusões de dias anteriores
 app.get("/api/rescisao-historico", async (req, res) => {
   try {
-    const dataAtual = new Date();
-    const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
-    const mesNome = meses[dataAtual.getMonth()];
-    const stringHoje = `${dataAtual.getDate()} de ${mesNome} de ${dataAtual.getFullYear()}`;
-
-    // Apaga do banco tudo que NÃO tiver a data de hoje escrita no texto
-    await HistoricoExclusao.deleteMany({ dataExclusao: { $not: { $regex: stringHoje, $options: "i" } } });
-
     const historico = await HistoricoExclusao.find().sort({ _id: -1 });
     res.json(historico);
   } catch (error) {
-    console.error("Erro no historico:", error);
+    console.error("Erro ao buscar histórico:", error);
     res.status(500).json({ error: "Erro ao buscar histórico" });
   }
 });
@@ -1142,6 +1134,16 @@ app.delete("/api/rescisao-historico/:id", async (req, res) => {
 // ======================================================
 // ROTA: UPLOAD E SINCRONIZAÇÃO DA PLANILHA DE FALTAS
 // ======================================================
+app.get('/api/faltas', async (req, res) => {
+  try {
+    const faltas = await Falta.find();
+    res.json(faltas);
+  } catch (error) {
+    console.error("Erro ao buscar faltas do banco:", error);
+    res.status(500).json({ error: "Erro ao buscar a lista de faltas." });
+  }
+});
+
 app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });

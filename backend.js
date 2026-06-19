@@ -69,7 +69,8 @@ const rescisaoSchema = new mongoose.Schema({
   prioridade: String,
   descricao: String,
   validacao: String,
-  criadoEm: String
+  criadoEm: String,
+  nome_vinculado: String 
 });
 
 const historicoExclusaoSchema = new mongoose.Schema({

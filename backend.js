@@ -1032,16 +1032,6 @@ app.put("/api/rescisao/:id", async (req, res) => {
   }
 });
 
-// 4. Excluir Rescisão (Lixeira)
-app.delete("/api/rescisao/:id", async (req, res) => {
-  try {
-    await Rescisao.findByIdAndDelete(req.params.id);
-    res.json({ message: "🗑️ Rescisão deletada com sucesso" });
-  } catch (error) {
-    res.status(500).json({ error: "Erro ao deletar rescisão" });
-  }
-});
-
 // ======================================================
 // ROTAS DE RESCISÃO E LIXEIRA
 // ======================================================

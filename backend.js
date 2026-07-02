@@ -1208,13 +1208,33 @@ app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
     });
 
     // 3. Deleta a base antiga inteira e insere a nova atualizada
-    await Falta.deleteMany({});
-    if (faltasParaSalvar.length > 0) {
-      await Falta.insertMany(faltasParaSalvar);
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // Passamos a { session } para garantir que essas ações só existam dentro da transação por enquanto
+      await Falta.deleteMany({}, { session });
+      
+      if (faltasParaSalvar.length > 0) {
+        await Falta.insertMany(faltasParaSalvar, { session });
+      }
+
+      // Se tudo deu certo, "comitamos" a transação. 
+      // É SÓ AQUI que o banco troca os dados de verdade, instantaneamente.
+      await session.commitTransaction();
+      session.endSession();
+
+      console.log(`✅ Planilha de Faltas sincronizada: ${faltasParaSalvar.length} linhas.`);
+      res.json({ message: "Planilha sincronizada com sucesso!", total: faltasParaSalvar.length });
+
+    } catch (dbError) {
+      // Se der qualquer erro na deleção ou inserção, ele desfaz tudo e o banco volta intacto
+      await session.abortTransaction();
+      session.endSession();
+      console.error("Erro durante a transação do banco:", dbError);
+      throw dbError; // Joga o erro para o catch externo
     }
 
-    console.log(`✅ Planilha de Faltas sincronizada: ${faltasParaSalvar.length} linhas.`);
-    res.json({ message: "Planilha sincronizada com sucesso!", total: faltasParaSalvar.length });
   } catch (error) {
     console.error("Erro ao processar planilha de faltas:", error);
     res.status(500).json({ error: "Erro ao processar a planilha." });

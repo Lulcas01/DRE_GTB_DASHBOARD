@@ -358,7 +358,7 @@ function identificarResponsavel(apelidoPosto) {
   return RESPONSAVEIS_CONTAS[apelidoPosto] || "NAO_ATRIBUIDO";
 }
 
-js
+
 function identificarProduto(texto) {
   // 1. ADITIVADA primeiro (prioridade máxima, pois o texto pode conter "COMUM" junto)
   if (
@@ -1244,6 +1244,58 @@ app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
     res.status(500).json({ error: "Erro ao processar a planilha." });
   }
 });
+app.get('/api/notas/admin/reprocessar-produto', async (req, res) => {
+  console.log("🚀 Reprocessando produto das notas marcadas como COMUM...");
+  try {
+    const db = mongoose.connection.db;
+    const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
+
+    // Só as suspeitas: quem está como COMUM pode ser aditivada mal classificada
+    const arquivos = await db.collection('notasFiscais.files').find({
+      "metadata.produto": "COMUM"
+    }).toArray();
+
+    let atualizadas = 0;
+    let erros = 0;
+
+    for (const arquivo of arquivos) {
+      try {
+        const downloadStream = bucket.openDownloadStream(arquivo._id);
+        const chunks = [];
+        for await (const chunk of downloadStream) { chunks.push(chunk); }
+        const fileBuffer = Buffer.concat(chunks);
+
+        const parser = new PDFParse(new Uint8Array(fileBuffer));
+        const resultado = await parser.getText();
+        const textoCru = normalizarTexto(resultado.text).replace(/\s+/g, ' ');
+
+        const novoProduto = identificarProduto(textoCru);
+
+        if (novoProduto !== arquivo.metadata.produto) {
+          await db.collection('notasFiscais.files').updateOne(
+            { _id: arquivo._id },
+            { $set: { "metadata.produto": novoProduto } }
+          );
+          console.log(`✅ Corrigida: ${arquivo.filename} | ${arquivo.metadata.produto} -> ${novoProduto}`);
+          atualizadas++;
+        }
+      } catch (err) {
+        console.error(`❌ Erro no arquivo ${arquivo._id}:`, err);
+        erros++;
+      }
+    }
+
+    const msg = `✅ Concluído! Corrigidas: ${atualizadas} de ${arquivos.length} analisadas. Erros: ${erros}.`;
+    console.log(msg);
+    res.json({ mensagem: msg, corrigidas: atualizadas, analisadas: arquivos.length, erros });
+  } catch (error) {
+    console.error("Erro geral no reprocessamento de produto:", error);
+    res.status(500).json({ error: "Erro interno ao reprocessar produtos." });
+  }
+});
+
+
+
 // ======================================================
 // INICIALIZAÇÃO DO SERVIDOR
 // ======================================================

@@ -358,25 +358,29 @@ function identificarResponsavel(apelidoPosto) {
   return RESPONSAVEIS_CONTAS[apelidoPosto] || "NAO_ATRIBUIDO";
 }
 
+js
 function identificarProduto(texto) {
-  // 1. Busca por descrições completas e mais exatas (maior prioridade)
+  // 1. ADITIVADA primeiro (prioridade máxima, pois o texto pode conter "COMUM" junto)
+  if (
+    texto.includes("GASOLINA ADITIVADA") ||
+    texto.includes("ADIT PETROBRAS") ||
+    /GASOLINA[\s\S]{0,40}?\bADIT(IVADA|\.)?\b/.test(texto) // pega "GASOLINA COMUM C ADITIVADA", "GASOLINA COMUM C ADIT", "GASOLINA C ADIT." etc.
+  ) return "ADITIVADA";
+
+  // 2. Descrições completas e mais exatas
   if (texto.includes("ETANOL HIDRATADO") || texto.includes("ETANOL COMUM")) return "ETANOL";
   if (texto.includes("DIESEL B S10") || texto.includes("OLEO DIESEL S10") || texto.includes("DIESEL S10") || texto.includes("DIESEL S-10")) return "S10";
   if (texto.includes("DIESEL B S500") || texto.includes("OLEO DIESEL S500") || texto.includes("DIESEL S500") || texto.includes("DIESEL S-500")) return "DIESEL";
   if (texto.includes("GASOLINA C COMUM") || texto.includes("GASOLINA COMUM")) return "COMUM";
-  if (texto.includes("GASOLINA ADITIVADA") || texto.includes("ADIT PETROBRAS")) return "ADITIVADA";
 
-  // 2. Fallback usando Regex com "Word Boundaries" (\b)
-  // Isso garante que o sistema só encontre a palavra exata e solta, 
-  // evitando que um texto como "CAS100" seja lido como "S10".
+  // 3. Fallback com word boundaries
   if (/\bETANOL\b/.test(texto)) return "ETANOL";
   if (/\bS10\b/.test(texto)) return "S10";
   if (/\bS500\b/.test(texto)) return "DIESEL";
   if (/\bGASOLINA\b/.test(texto)) return "COMUM";
 
-  return "Outros"; 
+  return "Outros";
 }
-
 function identificarCategoriaCombustivel(textoCru) {
   const ehCombustivel = PALAVRAS_COMBUSTIVEL.some(p => textoCru.includes(p));
   if (!ehCombustivel) return "Outros";

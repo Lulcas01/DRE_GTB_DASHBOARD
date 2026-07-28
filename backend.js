@@ -101,7 +101,12 @@ const FaltaSchema = new mongoose.Schema({
   postoFiltro: String,
   nome_funcionario: String
 });
+const statusPagamentoSchema = new mongoose.Schema({
+  posto: { type: String, required: true, unique: true },
+  status: { type: String, default: "NÃO LIBERADO" }
+});
 
+const StatusPagamento = mongoose.models.StatusPagamento || mongoose.model("StatusPagamento", statusPagamentoSchema);
 const Rescisao = mongoose.models.Rescisao || mongoose.model("Rescisao", rescisaoSchema);
 const HistoricoExclusao = mongoose.models.HistoricoExclusao || mongoose.model("HistoricoExclusao", historicoExclusaoSchema);
 const Falta = mongoose.models.Falta || mongoose.model("Falta", FaltaSchema);
@@ -1294,7 +1299,42 @@ app.get('/api/notas/admin/reprocessar-produto', async (req, res) => {
   }
 });
 
+// ======================================================
+// ROTAS: STATUS DE PAGAMENTO DA FOLHA POR POSTO
+// ======================================================
 
+// Buscar todos os status salvos
+app.get('/api/status-pagamento', async (req, res) => {
+  try {
+    const status = await StatusPagamento.find();
+    // Retorna já no formato { "AEROTOWN": "LIBERADO", "CAFUNDÁ": "NÃO LIBERADO", ... }
+    const mapa = {};
+    status.forEach(s => { mapa[s.posto] = s.status; });
+    res.json(mapa);
+  } catch (error) {
+    console.error("Erro ao buscar status de pagamento:", error);
+    res.status(500).json({ error: "Erro ao buscar status de pagamento." });
+  }
+});
+
+// Atualizar (ou criar) o status de um posto específico
+app.put('/api/status-pagamento/:posto', async (req, res) => {
+  try {
+    const { posto } = req.params;
+    const { status } = req.body;
+
+    const atualizado = await StatusPagamento.findOneAndUpdate(
+      { posto },
+      { posto, status },
+      { new: true, upsert: true }
+    );
+
+    res.json({ message: "✅ Status atualizado", statusPagamento: atualizado });
+  } catch (error) {
+    console.error("Erro ao atualizar status de pagamento:", error);
+    res.status(500).json({ error: "Erro ao atualizar status de pagamento." });
+  }
+});
 
 // ======================================================
 // INICIALIZAÇÃO DO SERVIDOR

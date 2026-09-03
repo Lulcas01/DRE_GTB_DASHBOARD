@@ -101,11 +101,20 @@ const FaltaSchema = new mongoose.Schema({
   postoFiltro: String,
   nome_funcionario: String
 });
+
+const configCorteSchema = new mongoose.Schema({
+  identificador: { type: String, default: "geral", unique: true },
+  inicio: String,   // "AAAA-MM-DD"
+  fim: String,      // "AAAA-MM-DD"
+  atualizadoEm: String,
+  atualizadoPor: String
+});
+ 
+const ConfigCorte = mongoose.models.ConfigCorte || mongoose.model("ConfigCorte", configCorteSchema);
 const statusPagamentoSchema = new mongoose.Schema({
   posto: { type: String, required: true, unique: true },
   status: { type: String, default: "NÃO LIBERADO" }
 });
-
 const StatusPagamento = mongoose.models.StatusPagamento || mongoose.model("StatusPagamento", statusPagamentoSchema);
 const Rescisao = mongoose.models.Rescisao || mongoose.model("Rescisao", rescisaoSchema);
 const HistoricoExclusao = mongoose.models.HistoricoExclusao || mongoose.model("HistoricoExclusao", historicoExclusaoSchema);
@@ -1336,6 +1345,87 @@ app.put('/api/status-pagamento/:posto', async (req, res) => {
   }
 });
 
+
+ 
+// ---------- 2. ROTAS (colar perto das rotas de status-pagamento) ----------
+ 
+// Calcula a janela padrão (ciclo do dia 27 ao dia 26) para quando ainda não há nada salvo
+const DIA_INICIO_CICLO = 28;
+ 
+function janelaCortePadrao(hoje = new Date()) {
+  const toISO = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+ 
+  // Se hoje já passou do dia de corte, o ciclo fechado é o que terminou neste mês
+  const fim = hoje.getDate() >= DIA_INICIO_CICLO
+    ? new Date(hoje.getFullYear(), hoje.getMonth(), DIA_INICIO_CICLO - 1)
+    : new Date(hoje.getFullYear(), hoje.getMonth() - 1, DIA_INICIO_CICLO - 1);
+ 
+  const inicio = new Date(fim.getFullYear(), fim.getMonth() - 1, DIA_INICIO_CICLO);
+  return { inicio: toISO(inicio), fim: toISO(fim) };
+}
+ 
+// Buscar a janela de corte em vigor
+app.get('/api/config-corte', async (req, res) => {
+  try {
+    let config = await ConfigCorte.findOne({ identificador: "geral" });
+ 
+    // Primeira vez: cria com o padrão calculado
+    if (!config) {
+      const padrao = janelaCortePadrao();
+      config = await ConfigCorte.create({
+        identificador: "geral",
+        inicio: padrao.inicio,
+        fim: padrao.fim,
+        atualizadoEm: new Date().toISOString(),
+        atualizadoPor: "sistema (padrão)"
+      });
+    }
+ 
+    res.json({
+      inicio: config.inicio,
+      fim: config.fim,
+      atualizadoEm: config.atualizadoEm,
+      atualizadoPor: config.atualizadoPor
+    });
+  } catch (error) {
+    console.error("Erro ao buscar config de corte:", error);
+    res.status(500).json({ error: "Erro ao buscar a data de corte." });
+  }
+});
+ 
+// Atualizar a janela de corte
+app.put('/api/config-corte', async (req, res) => {
+  try {
+    const { inicio, fim, usuario } = req.body;
+ 
+    const formatoOk = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+    if (!formatoOk(inicio) || !formatoOk(fim)) {
+      return res.status(400).json({ error: "Datas devem estar no formato AAAA-MM-DD." });
+    }
+    if (fim < inicio) {
+      return res.status(400).json({ error: "A data final não pode ser anterior à inicial." });
+    }
+ 
+    const atualizado = await ConfigCorte.findOneAndUpdate(
+      { identificador: "geral" },
+      {
+        identificador: "geral",
+        inicio,
+        fim,
+        atualizadoEm: new Date().toISOString(),
+        atualizadoPor: usuario || "não informado"
+      },
+      { new: true, upsert: true }
+    );
+ 
+    console.log(`📅 Janela de corte alterada para ${inicio} a ${fim} por ${usuario || "não informado"}`);
+    res.json({ inicio: atualizado.inicio, fim: atualizado.fim });
+  } catch (error) {
+    console.error("Erro ao salvar config de corte:", error);
+    res.status(500).json({ error: "Erro ao salvar a data de corte." });
+  }
+});
 // ======================================================
 // INICIALIZAÇÃO DO SERVIDOR
 // ======================================================

@@ -9,6 +9,7 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { PDFParse } from 'pdf-parse';
+import { lerDanfe } from './danfe.js';
 
 dotenv.config();
 
@@ -634,6 +635,8 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
     const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
     const zip = new AdmZip(req.file.buffer);
     let notasProcessadas = [];
+    let notasRepetidas = 0;
+    await garantirIndicesNotas(db);
 
     for (const entry of zip.getEntries()) {
       if (!entry.isDirectory && entry.entryName.toLowerCase().endsWith('.pdf')) {
@@ -643,8 +646,17 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
         
         let textoCru = normalizarTexto(resultado.text).replace(/\s+/g, ' '); 
 
+        // Dados da NF-e (número, valor, quantidade, valor unitário...) lidos do DANFE
+        const danfe = lerDanfe(resultado.text, entry.entryName);
+
+        // Mesma nota (mesma chave de acesso) já enviada antes: não grava de novo
+        if (danfe?.chave && await db.collection('notasFiscais.files').findOne({ "metadata.danfe.chave": danfe.chave }, { projection: { _id: 1 } })) {
+          notasRepetidas++;
+          continue;
+        }
+
         const dateMatch = textoCru.match(/(\d{2}\/\d{2}\/\d{4})/);
-        let dataEmissao = dateMatch ? dateMatch[1].split('/').reverse().join('-') : "DATA_DESCONHECIDA";
+        let dataEmissao = danfe?.dataEmissao || (dateMatch ? dateMatch[1].split('/').reverse().join('-') : "DATA_DESCONHECIDA");
         
         const identificacao = identificarPostoEfetivo(textoCru);
         const postoIdentificado = identificacao.apelido;
@@ -657,7 +669,8 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
         const filename = `${postoIdentificado}_${dataEmissao}_${entry.entryName}`;
         const uploadStream = bucket.openUploadStream(filename, {
           metadata: {
-            posto: postoIdentificado, dataEmissao, categoria, produto, nomeOriginal: entry.entryName
+            posto: postoIdentificado, dataEmissao, categoria, produto, nomeOriginal: entry.entryName,
+            ...(danfe ? { danfe } : {})
           }
         });
 
@@ -666,7 +679,7 @@ app.post('/api/notas/upload', upload.single('arquivoZip'), async (req, res) => {
       }
     }
 
-    res.status(200).json({ mensagem: "ZIP processado com sucesso!", total: notasProcessadas.length, notas: notasProcessadas });
+    res.status(200).json({ mensagem: "ZIP processado com sucesso!", total: notasProcessadas.length, repetidas: notasRepetidas, notas: notasProcessadas });
   } catch (error) {
     console.error("Erro ao processar ZIP:", error);
     res.status(500).json({ error: "Erro interno ao processar o arquivo." });
@@ -787,15 +800,182 @@ app.get('/api/notas', async (req, res) => {
   try {
     const db = mongoose.connection.db;
     const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
-    const { posto, data, fornecedor } = req.query;
+    const { posto, data, fornecedor, desde } = req.query;
     const filtro = {};
     if (posto) filtro["metadata.posto"] = posto;
     if (data) filtro["metadata.dataEmissao"] = data;
     if (fornecedor) filtro["metadata.categoria"] = fornecedor;
-    const arquivos = await bucket.find(filtro).toArray();
+    if (desde) filtro["metadata.dataEmissao"] = { ...(data ? { $eq: data } : {}), $gte: String(desde) };
+    // Só o que a tela usa (sem os dados do DANFE): a resposta fica bem menor
+    const arquivos = await bucket.find(filtro, {
+      projection: {
+        filename: 1, uploadDate: 1, length: 1,
+        "metadata.posto": 1, "metadata.dataEmissao": 1, "metadata.categoria": 1,
+        "metadata.produto": 1, "metadata.baixado": 1, "metadata.nomeOriginal": 1,
+      },
+    }).toArray();
     res.json(arquivos);
   } catch (error) {
     res.status(500).json({ error: "Erro ao buscar notas fiscais." });
+  }
+});
+
+
+// ======================================================
+// NOTAS: BUSCA (posto, data, combustíveis) E LEITURA DO DANFE
+// ======================================================
+let indicesNotasCriados = false;
+async function garantirIndicesNotas(db) {
+  if (indicesNotasCriados) return;
+  const col = db.collection('notasFiscais.files');
+  await Promise.all([
+    col.createIndex({ "metadata.posto": 1, "metadata.dataEmissao": -1 }),
+    col.createIndex({ "metadata.dataEmissao": -1 }),
+    col.createIndex({ "metadata.danfe.chave": 1 }),
+    col.createIndex({ "metadata.danfe.combustiveis": 1 }),
+  ]);
+  indicesNotasCriados = true;
+}
+
+const diasEntre = (a, b) => Math.abs((new Date(a + "T12:00:00Z") - new Date(b + "T12:00:00Z")) / 86400000);
+
+// GET /api/notas/busca?posto=BAM%20BAM&data=2026-10-10&combustiveis=COMUM,S10&quantas=3&dias=60
+//   posto        nome do posto como aparece nas notas (vários separados por vírgula)
+//   data         data de referência; sem ela, traz as mais recentes
+//   combustiveis COMUM, ADITIVADA, ETANOL, S10, DIESEL, GNV (vários separados por vírgula)
+//   quantas      quantas notas DE CADA combustível (padrão 10, máximo 200)
+//   porCombustivel=0  "quantas" passa a ser o total, misturando os combustíveis
+//   dias         só notas até N dias antes/depois da data (padrão 90)
+app.get('/api/notas/busca', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    await garantirIndicesNotas(db);
+    const col = db.collection('notasFiscais.files');
+    const lista = (v) => String(v || "").split(",").map((x) => x.trim()).filter(Boolean);
+    const postos = lista(req.query.posto);
+    const combustiveis = lista(req.query.combustiveis).map((c) => c.toUpperCase());
+    const quantas = Math.min(Math.max(parseInt(req.query.quantas, 10) || 10, 1), 200);
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 90, 1), 730);
+    const data = /^\d{4}-\d{2}-\d{2}$/.test(req.query.data || "") ? req.query.data : null;
+    // porCombustivel=1 (padrão): "quantas" vale para CADA combustível (3 de etanol, 3 de comum...)
+    const porCombustivel = req.query.porCombustivel !== "0";
+
+    const filtroBase = { "metadata.danfe": { $exists: true } };
+    if (postos.length) filtroBase["metadata.posto"] = { $in: postos };
+    if (data) {
+      const d = new Date(data + "T12:00:00Z");
+      const desloca = (n) => new Date(d.getTime() + n * 86400000).toISOString().slice(0, 10);
+      filtroBase["metadata.dataEmissao"] = { $gte: desloca(-dias), $lte: desloca(dias) };
+    }
+
+    // Busca as notas de um conjunto de combustíveis (vazio = qualquer combustível)
+    async function buscarGrupo(combs, grupo) {
+      const filtro = { ...filtroBase };
+      if (combs.length) filtro["metadata.danfe.combustiveis"] = { $in: combs };
+      else filtro["metadata.danfe.combustiveis.0"] = { $exists: true }; // bebidas etc. ficam de fora
+      const docs = await col
+        .find(filtro, { projection: { filename: 1, "metadata.posto": 1, "metadata.dataEmissao": 1, "metadata.categoria": 1, "metadata.danfe": 1 } })
+        .sort({ "metadata.dataEmissao": -1 })
+        .limit(data ? 5000 : quantas)
+        .toArray();
+      let notas = docs.map((doc) => {
+        const m = doc.metadata || {};
+        const dn = m.danfe || {};
+        const itens = (dn.itens || []).filter((i) => i.combustivel && (!combs.length || combs.includes(i.combustivel)));
+        return {
+          id: doc._id,
+          grupo,
+          posto: m.posto,
+          data: m.dataEmissao,
+          numero: dn.numero || "",
+          serie: dn.serie || "",
+          chave: dn.chave || "",
+          emitente: dn.emitente || m.categoria || "",
+          valorNota: dn.valorTotal ?? null,
+          itens: itens.map((i) => ({
+            combustivel: i.combustivel, descricao: i.descricao, unidade: i.unidade,
+            quantidade: i.quantidade, valorUnitario: i.valorUnitario, valorTotal: i.valorTotal,
+          })),
+          distanciaDias: data ? diasEntre(m.dataEmissao, data) : null,
+        };
+      });
+      if (data) notas = notas.sort((a, b) => a.distanciaDias - b.distanciaDias || String(b.data).localeCompare(String(a.data)));
+      return notas.slice(0, quantas);
+    }
+
+    let notas;
+    if (porCombustivel) {
+      // Sem combustível escolhido: um grupo para cada combustível que existir
+      const ORDEM = ["COMUM", "ADITIVADA", "ETANOL", "S10", "DIESEL", "GNV"];
+      const posicao = (c) => (ORDEM.indexOf(c) < 0 ? 99 : ORDEM.indexOf(c));
+      const grupos = (combustiveis.length
+        ? combustiveis
+        : (await col.distinct("metadata.danfe.combustiveis", filtroBase)).filter(Boolean)
+      ).sort((a, b) => posicao(a) - posicao(b));
+      notas = (await Promise.all(grupos.map((c) => buscarGrupo([c], c)))).flat();
+    } else {
+      notas = await buscarGrupo(combustiveis, null);
+    }
+
+    const semLeitura = await col.countDocuments({ "metadata.danfe": { $exists: false }, "metadata.lidaSemDanfe": { $ne: true } });
+    res.json({ notas, porCombustivel, notasSemLeitura: semLeitura });
+  } catch (error) {
+    console.error("Erro na busca de notas:", error);
+    res.status(500).json({ error: "Erro ao buscar notas." });
+  }
+});
+
+// Postos que têm notas (para a lista da tela de busca)
+app.get('/api/notas/postos', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const postos = await db.collection('notasFiscais.files').distinct("metadata.posto");
+    res.json(postos.filter(Boolean).sort());
+  } catch (error) {
+    res.status(500).json({ error: "Erro ao listar postos." });
+  }
+});
+
+// Lê o DANFE das notas que já estavam no banco (antes desta versão).
+// Faz um pedaço por vez: chame de novo até "restantes" chegar a 0.
+app.post('/api/notas/admin/ler-danfe', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    await garantirIndicesNotas(db);
+    const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
+    const col = db.collection('notasFiscais.files');
+    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 150, 1), 500);
+    const pendentes = { "metadata.danfe": { $exists: false }, "metadata.lidaSemDanfe": { $ne: true } };
+    const arquivos = await col.find(pendentes, { projection: { filename: 1, "metadata.nomeOriginal": 1 } }).limit(limite).toArray();
+
+    let lidas = 0, semDados = 0;
+    for (const arq of arquivos) {
+      try {
+        const partes = [];
+        await new Promise((ok, erro) => {
+          bucket.openDownloadStream(arq._id).on('data', (p) => partes.push(p)).on('end', ok).on('error', erro);
+        });
+        const parser = new PDFParse(new Uint8Array(Buffer.concat(partes)));
+        const resultado = await parser.getText();
+        const danfe = lerDanfe(resultado.text, arq.metadata?.nomeOriginal || arq.filename);
+        if (danfe) {
+          await col.updateOne({ _id: arq._id }, { $set: { "metadata.danfe": danfe } });
+          lidas++;
+        } else {
+          await col.updateOne({ _id: arq._id }, { $set: { "metadata.lidaSemDanfe": true } });
+          semDados++;
+        }
+      } catch (e) {
+        console.error(`DANFE ${arq.filename}:`, e.message);
+        await col.updateOne({ _id: arq._id }, { $set: { "metadata.lidaSemDanfe": true } });
+        semDados++;
+      }
+    }
+    const restantes = await col.countDocuments(pendentes);
+    res.json({ lidas, semDados, restantes });
+  } catch (error) {
+    console.error("Erro ao ler DANFEs:", error);
+    res.status(500).json({ error: "Erro ao ler as notas antigas." });
   }
 });
 
@@ -942,28 +1122,45 @@ app.get('/api/notas/admin/reprocessar', async (req, res) => {
 
 //################ DASHBOARD DE VENDAS ################
 // 2. ROTA POST 2026: Rota onde o seu script Python vai mandar a carga diária de 2026
-app.post('/api/dashboard/SalvarDadosVendas2026', async (req, res) => {
-    let client;
-    try {
-        client = new MongoClient(MONGO_URI);
-        await client.connect();
-        const db = client.db(DB_NAME);
-        const collection = db.collection("vendas_dashboard_2026");
+const ANOS_VENDAS_PERMITIDOS = ['2025', '2026'];
 
-        // Limpa apenas o ano corrente (2026) e reinsere a atualização do Python
-        await collection.deleteMany({});
-        if (req.body && req.body.length > 0) {
-            await collection.insertMany(req.body);
-        }
-        res.status(200).json({ message: "✅ Vendas de 2026 atualizadas com sucesso!" });
-    } catch (error) {
-        res.status(500).json({ error: "Erro interno ao atualizar dados de 2026." });
-    } finally {
-        if (client) client.close();
-    }
-});
+async function salvarVendasDoAno(req, res, ano) {
+  if (!ANOS_VENDAS_PERMITIDOS.includes(ano)) {
+    return res.status(400).json({ error: `Ano ${ano} não permitido.` });
+  }
+  if (!Array.isArray(req.body) || req.body.length === 0) {
+    return res.status(400).json({ error: "O corpo deve ser uma lista de postos não vazia." });
+  }
 
-// 3. ROTA GET UNIFICADA: O React vai bater aqui e receber a fusão perfeita de 2025 + 2026
+  const nomeColecao = `vendas_dashboard_${ano}`;
+  const nomeTemp = `${nomeColecao}_tmp`;
+  let client;
+
+  try {
+    client = new MongoClient(MONGO_URI);
+    await client.connect();
+    const db = client.db(DB_NAME);
+
+    // 1. Grava primeiro numa coleção temporária
+    await db.collection(nomeTemp).deleteMany({});
+    await db.collection(nomeTemp).insertMany(req.body);
+
+    // 2. Só se a gravação deu certo, substitui a coleção oficial
+    await db.collection(nomeTemp).rename(nomeColecao, { dropTarget: true });
+
+    console.log(`✅ Vendas de ${ano} atualizadas: ${req.body.length} postos.`);
+    res.status(200).json({ message: `✅ Vendas de ${ano} atualizadas com sucesso! (${req.body.length} postos)` });
+  } catch (error) {
+    console.error(`❌ Erro ao salvar vendas de ${ano}:`, error);
+    res.status(500).json({ error: `Erro interno ao atualizar dados de ${ano}.`, detalhe: error.message });
+  } finally {
+    if (client) await client.close();
+  }
+}
+
+app.post('/api/dashboard/SalvarDadosVendas2025', (req, res) => salvarVendasDoAno(req, res, '2025'));
+app.post('/api/dashboard/SalvarDadosVendas2026', (req, res) => salvarVendasDoAno(req, res, '2026'));
+
 app.get('/api/dashboard/BuscarDadosVendas', async (req, res) => {
     let client;
     try {
@@ -1431,4 +1628,4 @@ app.put('/api/config-corte', async (req, res) => {
 // ======================================================
 app.listen(PORT, () => {
     console.log(`🚀 Servidor a correr de forma unificada na porta ${PORT}`);
-});
+});

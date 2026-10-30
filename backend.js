@@ -941,6 +941,153 @@ app.get('/api/notas/postos', async (req, res) => {
   }
 });
 
+// ======================================================
+// CUSTOS (aba da tela Buscar notas)
+// Os mesmos dados do gráfico de custos (vendas_dashboard_AAAA), dia a dia,
+// junto com as notas de combustível que chegaram no posto:
+//   preço de venda, custo médio, diferença venda - custo, custo de entrada
+//   custo da nota = valor unitário das notas que chegaram naquele dia
+// GET /api/notas/margens?posto=BAM%20BAM&data=2026-09-15&antes=30&depois=0&combustiveis=COMUM,ETANOL
+//   empresa=...  (opcional) nome do posto nas vendas, se o automático não acertar
+// ======================================================
+const COMB_VENDAS = { COMUM: "GAS", ADITIVADA: "GAA", ETANOL: "ETA", S10: "S10", DIESEL: "DIE", GNV: "GNV" };
+const ORDEM_COMB = ["COMUM", "ADITIVADA", "ETANOL", "S10", "DIESEL", "GNV"];
+const nomeLimpo = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase()
+  .replace(/\b(AUTO ?POSTO|POSTO|LTDA|EIRELI|ME|SA|S A|COMERCIO DE COMBUSTIVEIS?|COMBUSTIVEIS?)\b/g, " ")
+  .replace(/[^A-Z0-9]+/g, " ").trim();
+
+// Acha o nome do posto nas vendas parecido com o nome do posto nas notas
+const APELIDOS_VENDAS = { AEROTOWN: "FLEMING" }; // nome nas notas -> nome nas vendas
+function acharEmpresa(posto, empresas) {
+  const limpo = nomeLimpo(posto);
+  const alvo = APELIDOS_VENDAS[limpo] || limpo;
+  if (!alvo) return null;
+  const iguais = empresas.find((e) => nomeLimpo(e) === alvo);
+  if (iguais) return iguais;
+  const sem = (s) => s.replace(/ /g, "");
+  const contem = empresas.filter((e) => {
+    const n = nomeLimpo(e);
+    return n && (sem(n).includes(sem(alvo)) || sem(alvo).includes(sem(n)));
+  });
+  if (contem.length) return contem.sort((a, b) => nomeLimpo(a).length - nomeLimpo(b).length)[0];
+  // Palavras em comum (ex.: "AERO - FLEMING" x "FLEMING")
+  const palavras = alvo.split(" ").filter((p) => p.length > 2);
+  let melhor = null, nota = 0;
+  empresas.forEach((e) => {
+    const pe = nomeLimpo(e).split(" ");
+    const comum = palavras.filter((p) => pe.includes(p)).length;
+    if (comum > nota) { melhor = e; nota = comum; }
+  });
+  return melhor;
+}
+
+app.get('/api/notas/margens', async (req, res) => {
+  try {
+    const dbNotas = mongoose.connection.db;
+    const dbVendas = mongoose.connection.client.db(DB_NAME); // mesmo banco do dashboard de vendas
+    const posto = String(req.query.posto || "").trim();
+    if (!posto || posto.includes(",")) return res.status(400).json({ error: "Escolha um posto." });
+    const lista = (v) => String(v || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
+    const combs = (lista(req.query.combustiveis).length ? lista(req.query.combustiveis) : ORDEM_COMB).filter((c) => COMB_VENDAS[c]);
+    const diasLado = (v, padrao) => (v === undefined || v === "" ? padrao : Math.min(Math.max(parseInt(v, 10) || 0, 0), 730));
+
+    // Vendas do posto (2025 e 2026)
+    const colecoes = (await dbVendas.listCollections({}, { nameOnly: true }).toArray())
+      .map((c) => c.name).filter((n) => /^vendas_dashboard_\d{4}$/.test(n)).sort();
+    const empresas = [...new Set((await Promise.all(colecoes.map((c) => dbVendas.collection(c).distinct("empresa")))).flat())].filter(Boolean).sort();
+    const empresa = (req.query.empresa && empresas.includes(req.query.empresa)) ? req.query.empresa : acharEmpresa(posto, empresas);
+
+    const vendasDia = new Map(); // "AAAA-MM-DD|COMB" -> combustível do dia
+    let ultimoDia = null;
+    if (empresa) {
+      const docs = await Promise.all(colecoes.map((c) => dbVendas.collection(c).findOne({ empresa }, { projection: { _id: 0, "detalhes.dias": 1 } })));
+      docs.filter(Boolean).forEach((doc) => (doc.detalhes || []).forEach((m) => (m.dias || []).forEach((d) => {
+        const [dd, mm, aa] = String(d.dia || "").split("/");
+        if (!aa) return;
+        const iso = `${aa}-${mm}-${dd}`;
+        (d.combustiveis || []).forEach((c) => {
+          if (!c || !(c.preco_venda > 0 || c.custo_medio > 0 || c.qtd_compra > 0)) return;
+          vendasDia.set(`${iso}|${c.nome}`, c);
+          if (!ultimoDia || iso > ultimoDia) ultimoDia = iso;
+        });
+      })));
+    }
+
+    // Janela de datas: a escolhida, ou os últimos 30 dias com venda
+    const temData = /^\d{4}-\d{2}-\d{2}$/.test(req.query.data || "");
+    const base = temData ? req.query.data : (ultimoDia || new Date().toISOString().slice(0, 10));
+    const antes = temData ? diasLado(req.query.antes, 30) : 30;
+    const depois = temData ? diasLado(req.query.depois, 30) : 0;
+    const d0 = new Date(base + "T12:00:00Z");
+    const desloca = (n) => new Date(d0.getTime() + n * 86400000).toISOString().slice(0, 10);
+    const de = desloca(-antes), ate = desloca(depois);
+
+    // Notas de combustível do posto na mesma janela
+    const notasDocs = await dbNotas.collection('notasFiscais.files')
+      .find({ "metadata.posto": posto, "metadata.dataEmissao": { $gte: de, $lte: ate }, "metadata.danfe.combustiveis": { $in: combs } },
+        { projection: { "metadata.dataEmissao": 1, "metadata.danfe.numero": 1, "metadata.danfe.emitente": 1, "metadata.danfe.itens": 1 } })
+      .toArray();
+    const notasDia = new Map(); // "AAAA-MM-DD|COMUM" -> [{...}]
+    notasDocs.forEach((doc) => {
+      const dn = doc.metadata.danfe;
+      (dn.itens || []).filter((i) => combs.includes(i.combustivel)).forEach((i) => {
+        const k = `${doc.metadata.dataEmissao}|${i.combustivel}`;
+        if (!notasDia.has(k)) notasDia.set(k, []);
+        notasDia.get(k).push({ id: doc._id, numero: dn.numero || "", emitente: dn.emitente || "", quantidade: i.quantidade, valorUnitario: i.valorUnitario, valorTotal: i.valorTotal });
+      });
+    });
+
+    const r4 = (n) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 10000) / 10000);
+    const media = (l) => (l.length ? l.reduce((a, x) => a + x, 0) / l.length : null);
+    const linhas = [];
+    const resumo = {};
+    combs.forEach((comb) => {
+      const cod = COMB_VENDAS[comb];
+      const dias = new Set();
+      vendasDia.forEach((_, k) => { const [dia, c] = k.split("|"); if (c === cod && dia >= de && dia <= ate) dias.add(dia); });
+      notasDia.forEach((_, k) => { const [dia, c] = k.split("|"); if (c === comb) dias.add(dia); });
+      const s = { precos: [], custos: [], difs: [], entradas: [], litrosNotas: 0, valorNotas: 0, notas: 0 };
+      [...dias].sort().reverse().forEach((dia) => {
+        const v = vendasDia.get(`${dia}|${cod}`) || {};
+        const notas = notasDia.get(`${dia}|${comb}`) || [];
+        const preco = v.preco_venda > 0 ? v.preco_venda : null;
+        const custo = v.custo_medio > 0 ? v.custo_medio : null;
+        const diferenca = preco != null && custo != null ? preco - custo : null;
+        const entrada = v.qtd_compra > 0 && v.custo_compra_calculado > 0 ? v.custo_compra_calculado : null;
+        const litrosNotas = notas.reduce((a, n) => a + (n.quantidade || 0), 0);
+        const valorNotas = notas.reduce((a, n) => a + (n.valorTotal || 0), 0);
+        linhas.push({
+          data: dia, combustivel: comb,
+          precoVenda: r4(preco), custoMedio: r4(custo), diferenca: r4(diferenca),
+          diferencaPct: diferenca != null ? r4(diferenca / preco) : null,
+          custoEntrada: r4(entrada), compraSGA: v.qtd_compra || 0,
+          notas, litrosNotas, custoNota: litrosNotas > 0 ? r4(valorNotas / litrosNotas) : null,
+        });
+        if (preco != null) s.precos.push(preco);
+        if (custo != null) s.custos.push(custo);
+        if (diferenca != null) s.difs.push(diferenca);
+        if (entrada != null) s.entradas.push(entrada);
+        s.litrosNotas += litrosNotas; s.valorNotas += valorNotas; s.notas += notas.length;
+      });
+      if (!dias.size) return;
+      // Médias dos dias do período (como no gráfico de custos)
+      const precoMedio = media(s.precos);
+      resumo[comb] = {
+        precoVenda: r4(precoMedio), custoMedio: r4(media(s.custos)),
+        diferenca: r4(media(s.difs)), diferencaPct: precoMedio && s.difs.length ? r4(media(s.difs) / precoMedio) : null,
+        custoEntrada: r4(media(s.entradas)), compras: s.entradas.length,
+        notas: s.notas, litrosNotas: s.litrosNotas,
+        custoNotas: s.litrosNotas ? r4(s.valorNotas / s.litrosNotas) : null,
+      };
+    });
+
+    res.json({ posto, empresa, empresas, de, ate, linhas, resumo });
+  } catch (error) {
+    console.error("Erro na aba de custos:", error);
+    res.status(500).json({ error: "Erro ao buscar os custos." });
+  }
+});
+
 // Lê o DANFE das notas que já estavam no banco (antes desta versão).
 // Só as de combustível (as "Outros" não têm gasolina/etanol/diesel/GNV no texto),
 // das mais novas para as mais antigas, várias ao mesmo tempo.

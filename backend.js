@@ -845,7 +845,8 @@ const diasEntre = (a, b) => Math.abs((new Date(a + "T12:00:00Z") - new Date(b + 
 //   combustiveis COMUM, ADITIVADA, ETANOL, S10, DIESEL, GNV (vários separados por vírgula)
 //   quantas      quantas notas DE CADA combustível (padrão 10, máximo 200)
 //   porCombustivel=0  "quantas" passa a ser o total, misturando os combustíveis
-//   dias         só notas até N dias antes/depois da data (padrão 90)
+//   antes/depois só notas até N dias antes / depois da data (0 = nenhum daquele lado; padrão: "dias")
+//   dias         padrão para antes e depois (90)
 app.get('/api/notas/busca', async (req, res) => {
   try {
     const db = mongoose.connection.db;
@@ -856,6 +857,10 @@ app.get('/api/notas/busca', async (req, res) => {
     const combustiveis = lista(req.query.combustiveis).map((c) => c.toUpperCase());
     const quantas = Math.min(Math.max(parseInt(req.query.quantas, 10) || 10, 1), 200);
     const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 90, 1), 730);
+    // Janela em volta da data: "antes" e "depois" separados (0 = nada daquele lado)
+    const diasDoLado = (v) => (v === undefined || v === "" ? dias : Math.min(Math.max(parseInt(v, 10) || 0, 0), 730));
+    const diasAntes = diasDoLado(req.query.antes);
+    const diasDepois = diasDoLado(req.query.depois);
     const data = /^\d{4}-\d{2}-\d{2}$/.test(req.query.data || "") ? req.query.data : null;
     // porCombustivel=1 (padrão): "quantas" vale para CADA combustível (3 de etanol, 3 de comum...)
     const porCombustivel = req.query.porCombustivel !== "0";
@@ -865,7 +870,7 @@ app.get('/api/notas/busca', async (req, res) => {
     if (data) {
       const d = new Date(data + "T12:00:00Z");
       const desloca = (n) => new Date(d.getTime() + n * 86400000).toISOString().slice(0, 10);
-      filtroBase["metadata.dataEmissao"] = { $gte: desloca(-dias), $lte: desloca(dias) };
+      filtroBase["metadata.dataEmissao"] = { $gte: desloca(-diasAntes), $lte: desloca(diasDepois) };
     }
 
     // Busca as notas de um conjunto de combustíveis (vazio = qualquer combustível)

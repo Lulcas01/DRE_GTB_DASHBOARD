@@ -917,7 +917,7 @@ app.get('/api/notas/busca', async (req, res) => {
       notas = await buscarGrupo(combustiveis, null);
     }
 
-    const semLeitura = await col.countDocuments({ "metadata.danfe": { $exists: false }, "metadata.lidaSemDanfe": { $ne: true } });
+    const semLeitura = await col.countDocuments(FILTRO_SEM_LEITURA);
     res.json({ notas, porCombustivel, notasSemLeitura: semLeitura });
   } catch (error) {
     console.error("Erro na busca de notas:", error);
@@ -937,41 +937,56 @@ app.get('/api/notas/postos', async (req, res) => {
 });
 
 // Lê o DANFE das notas que já estavam no banco (antes desta versão).
+// Só as de combustível (as "Outros" não têm gasolina/etanol/diesel/GNV no texto),
+// das mais novas para as mais antigas, várias ao mesmo tempo.
 // Faz um pedaço por vez: chame de novo até "restantes" chegar a 0.
+const FILTRO_SEM_LEITURA = {
+  "metadata.danfe": { $exists: false },
+  "metadata.lidaSemDanfe": { $ne: true },
+  "metadata.categoria": { $ne: "Outros" },
+};
+const LEITURAS_AO_MESMO_TEMPO = 6;
+
 app.post('/api/notas/admin/ler-danfe', async (req, res) => {
   try {
     const db = mongoose.connection.db;
     await garantirIndicesNotas(db);
     const bucket = new GridFSBucket(db, { bucketName: 'notasFiscais' });
     const col = db.collection('notasFiscais.files');
-    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 150, 1), 500);
-    const pendentes = { "metadata.danfe": { $exists: false }, "metadata.lidaSemDanfe": { $ne: true } };
-    const arquivos = await col.find(pendentes, { projection: { filename: 1, "metadata.nomeOriginal": 1 } }).limit(limite).toArray();
+    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 300, 1), 1000);
+    const arquivos = await col.find(FILTRO_SEM_LEITURA, { projection: { filename: 1, "metadata.nomeOriginal": 1 } })
+      .sort({ "metadata.dataEmissao": -1 })
+      .limit(limite)
+      .toArray();
 
     let lidas = 0, semDados = 0;
-    for (const arq of arquivos) {
+    const lerUma = async (arq) => {
+      let parser;
       try {
         const partes = [];
         await new Promise((ok, erro) => {
           bucket.openDownloadStream(arq._id).on('data', (p) => partes.push(p)).on('end', ok).on('error', erro);
         });
-        const parser = new PDFParse(new Uint8Array(Buffer.concat(partes)));
+        parser = new PDFParse(new Uint8Array(Buffer.concat(partes)));
         const resultado = await parser.getText();
         const danfe = lerDanfe(resultado.text, arq.metadata?.nomeOriginal || arq.filename);
-        if (danfe) {
-          await col.updateOne({ _id: arq._id }, { $set: { "metadata.danfe": danfe } });
-          lidas++;
-        } else {
-          await col.updateOne({ _id: arq._id }, { $set: { "metadata.lidaSemDanfe": true } });
-          semDados++;
-        }
+        await col.updateOne({ _id: arq._id }, { $set: danfe ? { "metadata.danfe": danfe } : { "metadata.lidaSemDanfe": true } });
+        if (danfe) lidas++; else semDados++;
       } catch (e) {
         console.error(`DANFE ${arq.filename}:`, e.message);
-        await col.updateOne({ _id: arq._id }, { $set: { "metadata.lidaSemDanfe": true } });
+        await col.updateOne({ _id: arq._id }, { $set: { "metadata.lidaSemDanfe": true } }).catch(() => {});
         semDados++;
+      } finally {
+        if (parser) await parser.destroy().catch(() => {}); // libera a memória do PDF
       }
-    }
-    const restantes = await col.countDocuments(pendentes);
+    };
+    // Várias notas ao mesmo tempo (o download do banco é o que mais demora)
+    let proxima = 0;
+    await Promise.all(Array.from({ length: LEITURAS_AO_MESMO_TEMPO }, async () => {
+      while (proxima < arquivos.length) await lerUma(arquivos[proxima++]);
+    }));
+
+    const restantes = await col.countDocuments(FILTRO_SEM_LEITURA);
     res.json({ lidas, semDados, restantes });
   } catch (error) {
     console.error("Erro ao ler DANFEs:", error);
@@ -1628,4 +1643,4 @@ app.put('/api/config-corte', async (req, res) => {
 // ======================================================
 app.listen(PORT, () => {
     console.log(`🚀 Servidor a correr de forma unificada na porta ${PORT}`);
-});
+});

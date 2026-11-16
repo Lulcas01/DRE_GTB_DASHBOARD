@@ -100,7 +100,8 @@ const FaltaSchema = new mongoose.Schema({
   parcial: Number,
   total: Number,
   postoFiltro: String,
-  nome_funcionario: String
+  nome_funcionario: String,
+  dataISO: { type: String, index: true } // "AAAA-MM-DD": é por ela que a importação troca só o período da planilha
 });
 
 const configCorteSchema = new mongoose.Schema({
@@ -1517,6 +1518,23 @@ app.get('/api/faltas', async (req, res) => {
   }
 });
 
+// Data da falta ("16/11/2026", "16/11/2026 10:30", "2026-11-16...") -> "2026-11-16"
+function diaDaFalta(valor) {
+  if (valor === undefined || valor === null || valor === "") return "";
+  if (typeof valor === "number" && valor > 20000) { // data do Excel
+    const d = new Date(Math.round((valor - 25569) * 86400000));
+    return d.toISOString().slice(0, 10);
+  }
+  const s = String(valor).trim();
+  let m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (m) {
+    const ano = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${ano}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  }
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
+}
+
 app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
@@ -1589,25 +1607,42 @@ app.post('/api/faltas/upload', upload.single('planilha'), async (req, res) => {
       };
     });
 
-    // 3. Deleta a base antiga inteira e insere a nova atualizada
+    // 3. Troca SÓ o período que veio na planilha (da primeira à última data dela).
+    //    O resto do ano fica guardado: importar de hora em hora o último mês
+    //    não apaga mais o histórico dos meses anteriores.
+    faltasParaSalvar.forEach((f) => { f.dataISO = diaDaFalta(f.data); });
+    const comData = faltasParaSalvar.filter((f) => f.dataISO);
+    if (!comData.length) {
+      return res.status(400).json({ error: "Não achei as datas das faltas na planilha. Nada foi alterado." });
+    }
+    const dias = comData.map((f) => f.dataISO).sort();
+    const de = dias[0];
+    const ate = dias[dias.length - 1];
+
+    // Faltas antigas (de antes desta mudança) ainda sem dataISO: preenche uma vez só
+    const semDia = await Falta.find({ dataISO: { $exists: false } }, { data: 1 }).lean();
+    if (semDia.length) {
+      await Falta.bulkWrite(semDia.map((f) => ({
+        updateOne: { filter: { _id: f._id }, update: { $set: { dataISO: diaDaFalta(f.data) } } },
+      })));
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
       // Passamos a { session } para garantir que essas ações só existam dentro da transação por enquanto
-      await Falta.deleteMany({}, { session });
-      
-      if (faltasParaSalvar.length > 0) {
-        await Falta.insertMany(faltasParaSalvar, { session });
-      }
+      await Falta.deleteMany({ $or: [{ dataISO: { $gte: de, $lte: ate } }, { dataISO: "" }] }, { session });
+      await Falta.insertMany(comData, { session });
 
       // Se tudo deu certo, "comitamos" a transação. 
       // É SÓ AQUI que o banco troca os dados de verdade, instantaneamente.
       await session.commitTransaction();
       session.endSession();
 
-      console.log(`✅ Planilha de Faltas sincronizada: ${faltasParaSalvar.length} linhas.`);
-      res.json({ message: "Planilha sincronizada com sucesso!", total: faltasParaSalvar.length });
+      const totalNoBanco = await Falta.countDocuments();
+      console.log(`✅ Faltas: ${comData.length} linhas de ${de} a ${ate} (banco com ${totalNoBanco}).`);
+      res.json({ message: "Planilha sincronizada com sucesso!", total: comData.length, de, ate, totalNoBanco });
 
     } catch (dbError) {
       // Se der qualquer erro na deleção ou inserção, ele desfaz tudo e o banco volta intacto
